@@ -730,10 +730,17 @@ if __name__ == '__main__':
     s.backward()
     f = field.grad
     field.requires_grad_(False)
-    print(f'plaq(x) {action(param, x[0]) / (-param.beta*param.volume)}  logJ {logJ}  force.norm {torch.linalg.norm(f)}')
+    print(
+        f'plaq(x): {action(param, x[0]) / (-param.beta*param.volume)} '
+        f'logJ: {logJ} '
+        f'force.norm: {torch.linalg.norm(f)}'
+    )
     y = x
     logJy = 0.0
     for layer in flow:
         y, lJ = layer.forward(y)
         logJy += lJ
-    print(f'plaq(y) {action(param, y[0]) / (-param.beta*param.volume)}  logJy {logJy}')
+    print(
+        f'plaq(y): {action(param, y[0]) / (-param.beta*param.volume)} '
+        f'logJy: {logJy}'
+    )
