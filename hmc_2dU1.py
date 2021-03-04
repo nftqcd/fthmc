@@ -127,7 +127,6 @@ def topocharge(f):
 def regularize(f):
     f_ = (f - PI) / TWO_PI
     return TWO_PI * (f_ - torch.floor(f_) - 0.5)
-    return p2*(f_ - torch.floor(f_) - 0.5)
 
 
 def leapfrog(param, x, p):
