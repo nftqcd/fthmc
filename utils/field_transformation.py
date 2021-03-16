@@ -51,10 +51,10 @@ def compute_ess(logp: torch.Tensor, logq: torch.Tensor):
 def bootstrap(x: np.ndarray, *, nboot: int, binsize: int):
     boots = []
     x = x.reshape(-1, binsize, *x.shape[1:])
-    boots = [
+    boots = np.array([
         np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
         for _ in range(nboot)
-    ]
+    ])
     #  for _ in range(Nboot):
     #      boots.append(
     #          np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
