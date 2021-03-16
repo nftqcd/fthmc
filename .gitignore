@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+pyrightconfig.json
+typings
+.vim
+.vscode
