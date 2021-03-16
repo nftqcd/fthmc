@@ -1,7 +1,10 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
+
 
 from IPython.display import display
+
 
 
 def init_live_plot(n_era, n_epoch, dpi=125, figsize=(8, 4)):
@@ -9,14 +12,15 @@ def init_live_plot(n_era, n_epoch, dpi=125, figsize=(8, 4)):
     plt.xlim(0, n_era * n_epoch)
     plt.ylim(0, 1)
 
-    ess_line = plt.plot([0], [0], alpha=0.5)  # dummy
+    ess_line = ax_ess.plot([0], [0], alpha=0.5, color='C0')  # dummyZ
     plt.grid(False)
     plt.ylabel('ESS')
 
     ax_loss = ax_ess.twinx()
-    loss_line = plt.plot([0], [0], alpha=0.5, c='orange')  # dummy
-    plt.grid(False)
-    plt.ylabel('Loss')
+    loss_line = ax_loss.plot([0], [0], alpha=0.5, c='C1')  # dummy
+    _ = ax_loss.set_ylabel('Loss')
+    _ = ax_loss.grid(True, alpha=0.4)
+    #  plt.ylabel('Loss')
 
     plt.xlabel('Epoch')
     display_id = display(fig, display_id=True)
