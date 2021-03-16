@@ -14,6 +14,16 @@ from math import pi as PI
 TWO_PI = 2 * PI
 
 
+# U1GaugeAction taken from:
+"""
+https://arxiv.org/abs/2101.08176
+
+"Introduction to Normalizing Flows for Lattice Field Theory
+Michael S. Albergo, Denis Boyda, Daniel C. Hackett, Gurtej Kanwar, Kyle
+Cranmer, Sébastien Racanière, Danilo Jimenez Rezende, Phiala E. Shanahan"
+"""
+
+
 def ft_flow(flow, f):
     for layer in flow:
         f, logdet = layer.forward(f)
@@ -27,15 +37,17 @@ def ft_flow_inv(flow, f):
 
     return f.detach()
 
-def ft_action(param, flow, field):
-    y = field
+def ft_action(param, flow, f):
+    y = f
     logdet = 0.
     for layer in flow:
         y, logdet_ = layer.forward(y)
         logdet += logdet_
 
-    s = action(param, y) - logdet
+    #  s = action(param, y)
+    act_fn = ft.U1GaugeAction(param.beta)
     #  action = ft.U1GaugeAction(param.beta)
+    s = act_fn(y) - logdet
 
     return s
 
@@ -43,7 +55,6 @@ def ft_force(param, flow, field, create_graph=False):
     # f is the field follows the transformed distribution (close to prior)
     field.requires_grad_(True)
     s = ft_action(param, flow, field)
-    #  s = ft_action(param, flow, field)
     ss = torch.sum(s)
     ff, = torch.autograd.grad(ss, field, create_graph=create_graph)
     field.requires_grad_(False)
@@ -96,7 +107,7 @@ def leapfrog(param, x, p, verbose=True):
         print(f'plaq(x): {action(param, x) / (-param.beta * param.volume):<.4g}, '
               f'force.norm {torch.linalg.norm(f):>.4g}')
 
-    for i in range(param.nstep - 1):
+    for _ in range(param.nstep - 1):
         x_ = x_ + dt * p
         p_ = p_ + (-dt) * force(param, x_)
 
