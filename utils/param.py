@@ -12,18 +12,31 @@ import torch
 class Param:
     def __init__(
         self,
-        beta: float = 6.0,
-        lat: list = [64, 64],
-        tau: float = 2.0,
-        nstep: int = 50,
-        ntraj: int = 256,
-        nrun: int = 4,
-        nprint: int = 256,
-        seed: int = 11*13,
-        randinit: bool = False,
-        nth: int = int(os.environ.get('OMP_NUM_THREADS', '2')),
-        nth_interop: int = 2
+        beta: float = 6.0,          # inverse coupling const
+        lat: list = [64, 64],       # lattice shape
+        tau: float = 2.0,           # trajectory length
+        nstep: int = 50,            # number of leapfrog steps
+        ntraj: int = 256,           # number of trajectories
+        nrun: int = 4,              # number of runs
+        nprint: int = 256,          # print freq  ??
+        seed: int = 11*13,          # seed
+        randinit: bool = False,     # randomly intitialize?
+        nth: int = int(os.environ.get('OMP_NUM_THREADS', '2')),  # num threads
+        nth_interop: int = 2,       # num interop threads
     ):
+        """Parameter object for runing the Field Transformation HMC.
+
+        NOTE: When running HMC, we generate configurations by the following loop:
+        -----
+        ```python
+        field = param.initializer()
+        trajectories = []
+        for n in range(param.nrum):
+            for i in range(param.ntraj):
+                field = hmc(param, field)
+            trajectories.append(field)
+        ```
+        """
         self.beta = beta
         self.lat = lat
         self.nd = len(lat)
