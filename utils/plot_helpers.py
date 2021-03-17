@@ -5,9 +5,11 @@ import seaborn as sns
 
 from IPython.display import display
 
+sns.set_palette('bright')
 
 
 def init_live_plot(n_era, n_epoch, dpi=125, figsize=(8, 4)):
+    sns.set_style('ticks')
     fig, ax_ess = plt.subplots(1, 1, dpi=dpi, figsize=figsize)
     plt.xlim(0, n_era * n_epoch)
     plt.ylim(0, 1)
@@ -19,7 +21,7 @@ def init_live_plot(n_era, n_epoch, dpi=125, figsize=(8, 4)):
     ax_loss = ax_ess.twinx()
     loss_line = ax_loss.plot([0], [0], alpha=0.5, c='C1')  # dummy
     _ = ax_loss.set_ylabel('Loss')
-    _ = ax_loss.grid(True, alpha=0.4)
+    #  _ = ax_loss.grid(True, alpha=0.4)
     #  plt.ylabel('Loss')
 
     plt.xlabel('Epoch')
