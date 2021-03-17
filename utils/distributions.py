@@ -10,11 +10,9 @@ def bootstrap(x: np.ndarray, *, nboot: int, binsize: int):
         np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
         for _ in range(nboot)
     ])
-    #  for _ in range(Nboot):
-    #      boots.append(
-    #          np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
-    #      )
+
     return np.mean(boots), np.std(boots)
+
 
 def calc_dkl(logp, logq):
     return (logq - logp).mean()
