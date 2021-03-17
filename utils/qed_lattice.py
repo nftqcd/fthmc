@@ -65,6 +65,28 @@ def compute_ess(logp: torch.Tensor, logq: torch.Tensor):
     return ess_per_cfg
 
 
+def apply_flow_to_prior(prior, layers, *, batch_size):
+    x = prior.sample_n(batch_size)
+    logq = prior.log_prob(x)
+    for layer in layers:
+        x, logJ = layer.forward(x)
+        logq = logq - logJ
+
+    return x, logq
+
+
+def serial_sample_generator(model, param, batch_size, num_samples):
+    layers = model['layers']
+    prior = model['prior']
+    layers.eval()
+    x, logq, logp = None, None, None
+    for i in range(num_samples):
+        batch_i = i % batch_size
+        if batch_i == 0:
+            # we're out of samples to propose, generate a new batch
+            x, logq =
+
+
 @dataclass
 class FlowConfig:
     n_layers: int
@@ -205,15 +227,59 @@ class qedLattice:
 
         return (x_, p_)
 
-    @staticmethod
-    def apply_flow_to_prior(prior, layers, *, batch_size):
-        x = prior.sample_n(batch_size)
-        logq = prior.log_prob(x)
-        for layer in layers:
-            x, logJ = layer.forward(x)
-            logq = logq - logJ
+    def serial_sample_generator(self, model, batch_size, num_samples):
+        layers, prior = model['layers'], model['prior']
+        layers.eval()
+        x, logq, logp = None, None, None
+        for i in range(num_samples):
+            batch_i = i % batch_size
+            if batch_i == 0:
+                # we're out of samples to propose, generate a new batch
+                x, logq = apply_flow_to_prior(prior, layers,
+                                              batch_size=batch_size)
+                logp = -self.action(x)
 
-        return x, logq
+            yield x[batch_i], logq[batch_i], logp[batch_i]
+
+    def make_mcmc_ensemble(self, model, batch_size, num_samples):
+        history = {
+            'x': [],
+            'logq': [],
+            'logp': [],
+            'accepted': [],
+        }
+
+        # build Markov chain
+        sample_gen = self.serial_sample_generator(model, batch_size=batch_size,
+                                                  num_samples=num_samples)
+        for new_x, new_logq, new_logp in sample_gen:
+            if len(history['logp']) == 0:
+                # always accept first prooposal, Markov chain must start
+                # somewhere
+                accepted = True
+            else:
+                # Metropolis acceptance criteria
+                last_logp = history['logp'][-1]
+                last_logq = history['logq'][-1]
+                p_accept = torch.exp(
+                    (new_logp - new_logq) - (last_logp - last_logq)
+                )
+                p_accept = min(1, p_accept)
+                draw = torch.rand(1)  # ~ [0, 1]
+                if draw < p_accept:
+                    accepted = True
+                else:
+                    accepted = False
+                    new_x = history['x'][-1]
+                    new_logp = last_logp
+                    new_logq = last_logq
+            # Update Markov chain
+            history['logp'].append(new_logp)
+            history['logq'].append(new_logq)
+            history['x'].append(new_x)
+            history['accepted'].append(accepted)
+
+        return history
 
     def hmc(self, x, verbose=True):
         p = torch.rand_like(x)
@@ -309,8 +375,7 @@ class qedLattice:
             x, pre_logJ = self.ft_flow(pre_xi, pre_layers)
             xi, pre_logJ_inv = self.ft_flow_inv(x, pre_layers)
 
-        x, logq = self.apply_flow_to_prior(prior, layers,
-                                           batch_size=batch_size)
+        x, logq = apply_flow_to_prior(prior, layers, batch_size=batch_size)
 
         logp = -self.action(x)
 
