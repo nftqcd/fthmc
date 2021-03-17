@@ -8,23 +8,27 @@ from IPython.display import display
 sns.set_palette('bright')
 
 
-def init_live_plot(n_era, n_epoch, dpi=125, figsize=(8, 4)):
+def init_live_plot(n_era, n_epoch, dpi=125, figsize=(8, 4), param=None):
     sns.set_style('ticks')
-    fig, ax_ess = plt.subplots(1, 1, dpi=dpi, figsize=figsize)
+    fig, ax_ess = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
+                               constrained_layout=True)
     plt.xlim(0, n_era * n_epoch)
     plt.ylim(0, 1)
 
     ess_line = ax_ess.plot([0], [0], alpha=0.5, color='C0')  # dummyZ
-    plt.grid(False)
-    plt.ylabel('ESS')
+    _ = ax_ess.set_ylabel('ESS', color='C0')
+    _ = ax_ess.tick_params(axis='y', labelcolor='C0')
+    _ = ax_ess.grid(False)
 
     ax_loss = ax_ess.twinx()
     loss_line = ax_loss.plot([0], [0], alpha=0.5, c='C1')  # dummy
-    _ = ax_loss.set_ylabel('Loss')
-    #  _ = ax_loss.grid(True, alpha=0.4)
-    #  plt.ylabel('Loss')
+    _ = ax_loss.set_ylabel('Loss', color='C1')
+    _ = ax_loss.tick_params(axis='y', labelcolor='C1')
+    _ = ax_loss.grid(False)
+    _ = ax_loss.set_xlabel('Epoch')
+    if param is not None:
+        _ = fig.suptitle(param.uniquestr())
 
-    plt.xlabel('Epoch')
     display_id = display(fig, display_id=True)
     return {
         'fig': fig,
