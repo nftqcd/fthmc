@@ -34,15 +34,16 @@ def serial_sample_generator(model, action_fn, batch_size, num_samples):
 
 
 def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
+    names = ['x', 'logq', 'logp', 'accepted']
     history = {
-        k: [] for k in ['x', 'logq', 'logp', 'accepted']
+        name: [] for name in names
     }
 
     # Build Markov chain
     sample_gen = serial_sample_generator(model, action_fn, batch_size,
                                          num_samples)
     for new_x, new_logq, new_logp in sample_gen:
-        if len(history['logp'] == 0):  # always accept the first proposal
+        if len(history['logp']) == 0:  # always accept the first proposal
             accepted = True
         else:
             last_logp = history['logp'][-1]
