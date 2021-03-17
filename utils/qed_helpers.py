@@ -27,10 +27,62 @@ def put(s):
     sys.stdout.write(s)
 
 
-def compute_u1_plaq(links, mu, nu):
-    """Compute U(1) plaqs in the (mu,nu) plane given `links` = arg(U)"""
-    return (links[:,mu] + torch.roll(links[:,nu], -1, mu+1)
-            - torch.roll(links[:,mu], -1, nu+1) - links[:,nu])
+def regularize(f):
+    f_ = (f - PI) / TWO_PI
+    return TWO_PI * (f_ - torch.floor(f_) - 0.5)
+
+
+def torch_mod(x):
+    return torch.remainder(x, TWO_PI)
+
+
+def torch_wrap(x):
+    return torch_mod(x + PI) - PI
+
+
+def plaq_phase_(f):
+    return (f[0, :]
+            + torch.roll(f[1, :], -1, 0)
+            - torch.roll(f[0, :], -1, 1)
+            - f[1, :])
+
+
+def compute_u1_plaq(links, mu=0, nu=1):
+    """Compute U(1) plaqs in the (mu, nu) plane given `links` = arg(U)"""
+    if len(links.shape) == 4:
+        return (links[:, mu]
+                + torch.roll(links[:, nu], -1, mu + 1)
+                - torch.roll(links[:, mu], -1, nu + 1)
+                - links[:, nu])
+    return (links[mu, :]
+            + torch.roll(links[nu, :], -1, mu + 1)
+            - torch.roll(links[mu, :], -1, nu + 1)
+            - links[nu, :])
+
+
+def plaq_phase(f, mu=0, nu=1):
+    if len(f.shape) == 4:
+        return (f[:, mu]
+                + torch.roll(f[:, nu], -1, mu + 1)
+                - torch.roll(f[:, mu], -1, nu + 1)
+                - f[:, nu])
+
+    return (f[0, :]
+            + torch.roll(f[1, :], -1, 0)
+            - torch.roll(f[0, :], -1, 1)
+            - f[1, :])
+
+
+def topo_charge(x):
+    phase = torch_wrap(compute_u1_plaq(x, mu=0, nu=1))
+    axes = tuple(range(1, len(phase.shape)))
+
+    return torch.sum(phase, dim=axes) / TWO_PI
+
+def topo_charge1(f):
+    phase = torch_wrap(plaq_phase(f))
+    axes = tuple(range(1, len(phase.shape)))
+    return torch.sum(phase, dim=axes) / TWO_PI
 
 
 class BatchAction:
@@ -47,6 +99,16 @@ class BatchAction:
 
         action = torch.sum(action_density, dim=tuple(range(1, Nd+1)))
         return - self.beta * action
+
+
+
+class Action:
+    def __init__(self, param):
+        self._param = param
+        self.beta = param.beta
+
+    def __call__(self, x):
+        return (-self.beta) * torch.sum(regularize(plaq_phase(x))) / TWO_PI
 
 
 def ft_flow(flow, f):
@@ -104,20 +166,6 @@ def force(param, f):
     return ff
 
 
-def plaq_phase(f):
-    return (f[0, :]
-            - f[1, :]
-            - torch.roll(f[0, :], shifts=-1, dims=1)
-            + torch.roll(f[1, :], shifts=-1, dims=0))
-
-
-def topo_charge(f):
-    return torch.floor(0.1 + torch.sum(regularize(plaq_phase(f))) / TWO_PI)
-
-
-def regularize(f):
-    f_ = (f - PI) / TWO_PI
-    return TWO_PI * (f_ - torch.floor(f_) - 0.5)
 
 
 def leapfrog(param, x, p, verbose=True):
@@ -151,12 +199,3 @@ def hmc(param, x, verbose=True):
     newx = xr if acc else x
 
     return (dH, exp_mdH, acc, newx)
-
-
-class Action:
-    def __init__(self, param):
-        self._param = param
-        self.beta = param.beta
-
-    def __call__(self, x):
-        return (-self.beta) * torch.sum(regularize(plaq_phase(x))) / TWO_PI
