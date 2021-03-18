@@ -15,8 +15,19 @@ import packaging.version
 
 from utils.qed_helpers import compute_u1_plaq
 
-torch_device = 'cpu'
-float_dtype = np.float64
+if torch.cuda.is_available():
+    torch_device = 'cuda'
+    float_dtype = np.float32
+    torch.set_default_tensor_type(torch.cuda.FloatTensor)
+else:
+    torch_device = 'cpu'
+    float_dtype = np.float64
+    torch.set_default_tensor_type(torch.cuda.DoubleTensor)
+
+print(f'TORCH DEVICE: {torch_device}')
+
+#  torch_device = 'cpu'
+#  float_dtype = np.float64
 
 def torch_mod(x):
     return torch.remainder(x, 2*np.pi)
