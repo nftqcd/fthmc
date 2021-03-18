@@ -6,10 +6,14 @@ from torch.distributions.uniform import Uniform
 def bootstrap(x: np.ndarray, *, nboot: int, binsize: int):
     boots = []
     x = x.reshape(-1, binsize, *x.shape[1:])
-    boots = np.array([
-        np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
-        for _ in range(nboot)
-    ])
+    for _ in range(nboot):
+        avg = np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
+        boots.append(avg)
+
+    #  boots = np.array([
+    #      np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
+    #      for _ in range(nboot)
+    #  ])
 
     return np.mean(boots), np.std(boots)
 
