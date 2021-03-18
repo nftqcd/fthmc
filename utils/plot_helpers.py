@@ -128,7 +128,7 @@ def update_joint_plots(
     if alt_loss is not None:
         y = history[str(alt_loss)]
     else:
-        y = history['loss']
+        y = history['loss_dkl']
 
     y = moving_average(y, window=window)
     loss_line[0].set_ydata(np.array(y))
