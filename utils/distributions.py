@@ -37,8 +37,8 @@ class SimpleNormal(torch.nn.Module):
                                                       torch.flatten(var))
         self.shape = loc.shape
 
-    def log_prob(self, x, beta=1.):
-        logp = beta * self.dist.log_prob(x.reshape(x.shape[0], -1))
+    def log_prob(self, x):
+        logp = self.dist.log_prob(x.reshape(x.shape[0], -1))
         return torch.sum(logp, dim=1)
 
     def sample_n(self, batch_size):
@@ -52,9 +52,9 @@ class MultivariateUniform(torch.nn.Module):
         super().__init__()
         self.dist = Uniform(a, b)
 
-    def log_prob(self, x, beta=1.):
+    def log_prob(self, x):
         axes = range(1, len(x.shape))
-        return torch.sum(beta * self.dist.log_prob(x), dim=tuple(axes))
+        return torch.sum(self.dist.log_prob(x), dim=tuple(axes))
 
     def sample_n(self, batch_size):
         return self.dist.sample((batch_size,))
