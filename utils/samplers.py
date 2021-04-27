@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 
-def apply_flow_to_prior(prior, coupling_layers, *, batch_size, xi = None):
+def apply_flow_to_prior(prior, coupling_layers, *, batch_size, xi=None):
     if xi is None:
         xi = prior.sample_n(batch_size)
 

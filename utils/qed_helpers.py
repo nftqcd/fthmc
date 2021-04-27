@@ -40,13 +40,6 @@ def torch_wrap(x):
     return torch_mod(x + PI) - PI
 
 
-def plaq_phase_(f):
-    return (f[0, :]
-            + torch.roll(f[1, :], -1, 0)
-            - torch.roll(f[0, :], -1, 1)
-            - f[1, :])
-
-
 def compute_u1_plaq(links, mu=0, nu=1):
     """Compute U(1) plaqs in the (mu, nu) plane given `links` = arg(U)"""
     if len(links.shape) == 4:
@@ -79,11 +72,6 @@ def topo_charge(x):
 
     return torch.sum(phase, dim=axes) / TWO_PI
 
-def topo_charge1(f):
-    phase = torch_wrap(plaq_phase(f))
-    axes = tuple(range(1, len(phase.shape)))
-    return torch.sum(phase, dim=axes) / TWO_PI
-
 
 class BatchAction:
     def __init__(self, beta):
@@ -93,22 +81,13 @@ class BatchAction:
         Nd = cfgs.shape[1]
         action_density = 0
         for mu in range(Nd):
-            for nu in range(mu + 1,Nd):
+            for nu in range(mu + 1, Nd):
                 plaq = compute_u1_plaq(cfgs, mu, nu)
                 action_density = action_density + torch.cos(plaq)
 
         action = torch.sum(action_density, dim=tuple(range(1, Nd+1)))
         return - self.beta * action
 
-
-
-class Action:
-    def __init__(self, param):
-        self._param = param
-        self.beta = param.beta
-
-    def __call__(self, x):
-        return (-self.beta) * torch.sum(regularize(plaq_phase(x))) / TWO_PI
 
 
 def ft_flow(flow, f):

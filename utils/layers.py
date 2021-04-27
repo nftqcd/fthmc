@@ -1,17 +1,24 @@
-# ------ BEGIN CODE FROM https://arxiv.org/abs/2101.08176
-# Introduction to Normalizing Flows for Lattice Field Theory
-# Michael S. Albergo, Denis Boyda, Daniel C. Hackett, Gurtej Kanwar, Kyle Cranmer, Sébastien Racanière, Danilo Jimenez Rezende, Phiala E. Shanahan
-# License: CC BY 4.0
-# With slight modifications by Xiao-Yong Jin to reduce global variables
+"""
+layers.py
 
-import torch
+------ BEGIN CODE FROM https://arxiv.org/abs/2101.08176
+Introduction to Normalizing Flows for Lattice Field Theory
+Michael S. Albergo, Denis Boyda, Daniel C. Hackett, Gurtej Kanwar, Kyle
+Cranmer, Sébastien Racanière, Danilo Jimenez Rezende, Phiala E. Shanahan
+License: CC BY 4.0
+
+With slight modifications by Xiao-Yong Jin to reduce global variables
+"""
+
 import math
-import sys
 import os
-from timeit import default_timer as timer
+import sys
 from functools import reduce
+from timeit import default_timer as timer
+
 import numpy as np
 import packaging.version
+import torch
 
 from utils.qed_helpers import compute_u1_plaq
 
@@ -22,7 +29,7 @@ if torch.cuda.is_available():
 else:
     torch_device = 'cpu'
     float_dtype = np.float64
-    torch.set_default_tensor_type(torch.cuda.DoubleTensor)
+    torch.set_default_tensor_type(torch.DoubleTensor)
 
 print(f'TORCH DEVICE: {torch_device}')
 
