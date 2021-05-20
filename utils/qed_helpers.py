@@ -91,6 +91,8 @@ class BatchAction:
 
 
 def ft_flow(flow, f):
+    #  if torch.cuda.is_available():
+    #      f = f.cuda()
     for layer in flow:
         f, logdet = layer.forward(f)
 
@@ -98,6 +100,9 @@ def ft_flow(flow, f):
 
 
 def ft_flow_inv(flow, f):
+    #  if torch.cuda.is_available():
+    #      f = f.cuda()
+
     for layer in reversed(flow):
         f, logdet = layer.reverse(f)
 

@@ -5,11 +5,73 @@ Implements `Param` object, a helper class for specifying the parameters of a
 model instance.
 """
 import os
+from dataclasses import dataclass
 from functools import reduce
 from math import pi as PI
+import numpy as np
 import torch
 
+
+@dataclass
 class Param:
+    beta: float = 6.0       # inverse coupling constant
+    #  batch_size: int = 128
+    L: int = 64
+    tau: float = 2.0        # trajectory length
+    nstep: int = 50
+    ntraj: int = 256
+    nrun: int = 4
+    nprint: int = 256
+    seed: int = 11 * 13
+    randinit: bool = False
+    nth: int = int(os.environ.get('OMP_NUM_THREADS', '2'))
+    nth_interop: int = 2
+
+    def __post_init__(self):
+        self.lat = [self.L, self.L]
+        self.nd = len(self.lat)
+        self.shape = [self.nd, *self.lat]
+        #  self.shape = [self.batch_size, self.nd, *self.lat]
+        self.volume = reduce(lambda x, y: x * y, self.lat)
+        self.dt = self.tau / self.nstep
+
+    def initializer(self):
+        #  if self.randinit:
+        #      rand = np.random.uniform(-PI, PI, size=self.shape)
+        #      return torch.from_numpy(rand)
+        #
+        #  return torch.zeros(self.shape)
+        if self.randinit:
+            return torch.empty([self.nd,] + self.lat).uniform_(-PI, PI)
+        else:
+            return torch.zeros([self.nd,] + self.lat)
+
+    def __repr__(self):
+        status = {k: v for k, v in self.__dict__.items()}
+        s = '\n'.join('='.join((str(k), str(v))) for k, v in status.items())
+        return '\n'.join(['Param:', 16 * '-', s])
+
+    def to_json(self):
+        attrs = {k: v for k, v in self.__dict__.items()}
+        return attrs
+
+    def summary(self):
+        return self.__repr__
+
+    def uniquestr(self, ext=None):
+        lat = "x".join(str(x) for x in self.lat)
+        ustr = (
+            f'out_t{lat}_b{self.beta}_n{self.ntraj}'
+            f'_t{self.tau}_s{self.nstep}'
+        )
+        if ext is not None:
+            ustr = f'{ustr}.ext'
+
+        return ustr
+
+
+
+class Param1:
     def __init__(
         self,
         beta: float = 6.0,          # inverse coupling const
