@@ -409,6 +409,9 @@ def train(
         logger: io.Logger = None,
 ):
     """Train the flow model."""
+    if logger is None:
+        logger = io.Logger()
+
     lattice_shape = tuple(param.lat)
     link_shape = (2, *param.lat)
     u1_action = qed.BatchAction(param.beta)
@@ -439,11 +442,11 @@ def train(
         plots, force_plots = init_plots(config, param, figsize=figsize)
 
     dt = 0.0
-    for era in range(config.n_era):
+    for era in range(1, config.n_era + 1):
         t0 = time.time()
         tprev = f'last took: {int(dt // 60)} min {dt % 60:.4g} s'
         logger.rule(f'ERA={era}, {tprev}')
-        for epoch in range(config.n_epoch):
+        for epoch in range(1, config.n_epoch + 1):
             if config.with_force:
                 batch_metrics = train_step(model, param,
                                            u1_action,
@@ -461,12 +464,12 @@ def train(
 
             history = update_history(history, batch_metrics,
                                      extras={'era': era, 'epoch': epoch})
-            if (epoch + 1) % param.nprint == 0:
+            if epoch % param.nprint == 0:
                 running_avgs = io.running_averages(history,
                                                    n_epochs=min(epoch, 5))
                 logger.print_metrics(running_avgs)
 
-            if (epoch + 1) % config.plot_freq == 0 and interactive:
+            if epoch % config.plot_freq == 0 and interactive:
                 if config.with_force:
                     loss_force_data = LivePlotData(history['loss_force'],
                                                    force_plots['plot_obj1'])
@@ -510,8 +513,8 @@ def generate_ensemble(
     charge = grab(qed.topo_charge(torch.stack(ensemble['x'], dim=0)))
     xmean, xerr = bootstrap(charge ** 2, nboot=nboot, binsize=binsize)
 
-    logger.log(f"Accept rate={np.mean(ensemble['accepted'])}")
-    logger.log(f"Topological susceptibility={xmean:.5f} +/- {xerr:.5f}")
+    logger.log(f'accept_rate={np.mean(ensemble["accepted"])}')
+    logger.log(f'top_susceptibility={xmean:.5f} +/- {xerr:.5f}')
 
     return {
         'ensemble': ensemble,

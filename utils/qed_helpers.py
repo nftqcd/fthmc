@@ -11,11 +11,16 @@ https://arxiv.org/abs/2101.08176
 Michael S. Albergo, Denis Boyda, Daniel C. Hackett, Gurtej Kanwar, Kyle
 Cranmer, Sébastien Racanière, Danilo Jimenez Rezende, Phiala E. Shanahan"
 """
+from __future__ import (
+    absolute_import, print_function, division, annotations
+)
 import sys
+from math import pi as PI
+
 import torch
+import torch.nn as nn
 
 from utils.param import Param
-from math import pi as PI
 
 TWO_PI = 2 * PI
 
@@ -89,24 +94,28 @@ class BatchAction:
         return - self.beta * action
 
 
+from typing import List
+Flow = List[torch.nn.Module]
 
-def ft_flow(flow, f):
+def ft_flow(flow: Flow, x: torch.Tensor):
+    """Pass `x` through (forward) through each layer in `flow`."""
     #  if torch.cuda.is_available():
     #      f = f.cuda()
     for layer in flow:
-        f, logdet = layer.forward(f)
+        x, logdet = layer.forward(x)
 
-    return f.detach()
+    return x.detach()
 
 
-def ft_flow_inv(flow, f):
+def ft_flow_inv(flow: list[nn.Module], x: torch.Tensor):
+    """Pass"""
     #  if torch.cuda.is_available():
     #      f = f.cuda()
 
     for layer in reversed(flow):
-        f, logdet = layer.reverse(f)
+        x, logdet = layer.reverse(x)
 
-    return f.detach()
+    return x.detach()
 
 
 def ft_action(param, flow, f):
