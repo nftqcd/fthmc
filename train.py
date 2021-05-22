@@ -356,23 +356,98 @@ def train_step(
     return batch_metrics
 
 
+def train_step_alt(
+        model: dict[str, nn.Module],
+        param: Param,
+        action: ActionFn,
+        optimizer: optim.Optimizer,
+        batch_size: int,
+        with_force: bool = False,
+        pre_model: dict[str, nn.Module] = None,
+        #  verbose: bool = False,
+        force_factor: float = 0.01,
+        dkl_factor: float = 1.,
+):
+    """Perform a single training step."""
+    t0 = time.time()
+    layers, prior = model['layers'], model['prior']
+    optimizer.zero_grad()
+
+    xi = None
+    if pre_model is not None:
+        pre_layers, pre_prior = pre_model['layers'], pre_model['prior']
+        pre_xi = pre_prior.sample_n(batch_size)
+        x = qed.ft_flow(pre_layers, pre_xi)
+        xi = qed.ft_flow_inv(layers, x)
+
+    xi, x, logq = apply_flow_to_prior(prior, layers,
+                                      batch_size=batch_size, xi=xi)
+    logp = (-1.) * action(x)
+    dkl = calc_dkl(logp, logq)
+    loss_dkl = torch.tensor(0.0)
+
+    ess = calc_ess(logp, logq)
+
+    force_size = torch.tensor(0.0)
+    loss_force = torch.tensor(0.0)
+    loss = torch.tensor(0.0)
+    force = qed.ft_force(param, layers, xi, True)
+    force_norm = torch.linalg.norm(force)
+    force_size = torch.sum(torch.square(force))
+
+    loss_dkl = dkl_factor * dkl
+    if with_force:
+        assert pre_model is not None
+        loss_force = force_factor * force_size
+
+    #  loss = dkl_factor * loss_dkl + force_factor * loss_force
+    loss = loss_dkl + loss_force
+    loss.backward()
+
+    #  if with_force:
+    #      assert pre_model is not None
+    #      #  force = qed.ft_force(param, layers, xi, True)
+    #      #  force_size = torch.sum(torch.square(force))
+    #      loss_force = force_size
+    #      #  loss_force.backward()
+    #  else:
+    #      #  loss_dkl = dkl
+    #      #  loss_dkl.backward()
+    #
+    #  loss = loss_dkl + loss_force
+
+    optimizer.step()
+    batch_metrics = {
+        'dt': time.time() - t0,
+        'ess': grab(ess),
+        'loss': grab(loss),
+        'loss_force': grab(loss_force),
+        'force_size': grab(force_size),
+        'force_norm': grab(force_norm),
+        'dkl': grab(dkl),
+        'logp': grab(logp),
+        'logq': grab(logq),
+    }
+
+    return batch_metrics
+
+
+
 def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
     plots = {}
     force_plots = {}
     if io.in_notebook():
+        y_label = ['loss', 'ESS']
+        plots = init_live_joint_plots(config.n_era, config.n_epoch,
+                                      dpi=500, figsize=figsize, param=param,
+                                      y_label=y_label)
         if config.with_force:
-            y_label = ['loss_force', 'ESS']
+            force_label = ['loss_force', 'ESS']
             force_plots = init_live_joint_plots(config.n_era,
                                                 config.n_epoch, dpi=500,
                                                 figsize=figsize,
                                                 param=param,
-                                                y_label=y_label)
-        else:
-            y_label = ['loss', 'ESS']
-            plots = init_live_joint_plots(config.n_era, config.n_epoch,
-                                          dpi=500, figsize=figsize, param=param,
-                                          y_label=y_label)
-
+                                                y_label=force_label)
     return plots, force_plots
 
 
@@ -407,6 +482,10 @@ def train(
         pre_model: dict[str, nn.Module] = None,
         figsize: tuple = (8, 3),
         logger: io.Logger = None,
+        use_alt: bool = False,
+        force_factor: float = 0.01,
+        dkl_factor: float = 1.,
+
 ):
     """Train the flow model."""
     if logger is None:
@@ -446,21 +525,32 @@ def train(
         t0 = time.time()
         tprev = f'last took: {int(dt // 60)} min {dt % 60:.4g} s'
         logger.rule(f'ERA={era}, {tprev}')
+
         for epoch in range(1, config.n_epoch + 1):
-            if config.with_force:
-                batch_metrics = train_step(model, param,
-                                           u1_action,
-                                           optimizer_force,
-                                           config.batch_size,
-                                           config.with_force,
-                                           pre_model=pre_model)
+            if use_alt:
+                batch_metrics = train_step_alt(model, param,
+                                               u1_action,
+                                               optimizer_kdl,
+                                               config.batch_size,
+                                               config.with_force,
+                                               pre_model=pre_model,
+                                               force_factor=force_factor,
+                                               dkl_factor=dkl_factor)
             else:
-                batch_metrics = train_step(model, param,
-                                           u1_action,
-                                           optimizer_kdl,
-                                           config.batch_size,
-                                           config.with_force,
-                                           pre_model=pre_model)
+                if config.with_force:
+                    batch_metrics = train_step(model, param,
+                                               u1_action,
+                                               optimizer_force,
+                                               config.batch_size,
+                                               config.with_force,
+                                               pre_model=pre_model)
+                else:
+                    batch_metrics = train_step(model, param,
+                                               u1_action,
+                                               optimizer_kdl,
+                                               config.batch_size,
+                                               config.with_force,
+                                               pre_model=pre_model)
 
             history = update_history(history, batch_metrics,
                                      extras={'era': era, 'epoch': epoch})
@@ -470,6 +560,12 @@ def train(
                 logger.print_metrics(running_avgs)
 
             if epoch % config.plot_freq == 0 and interactive:
+                loss_data = LivePlotData(history['loss'],
+                                         plots['plot_obj1'])
+                ess_data = LivePlotData(history['ess'],
+                                        plots['plot_obj2'])
+                update_joint_plots(loss_data, ess_data,
+                                   plots['display_id'])
                 if config.with_force:
                     loss_force_data = LivePlotData(history['loss_force'],
                                                    force_plots['plot_obj1'])
@@ -477,14 +573,6 @@ def train(
                                             force_plots['plot_obj2'])
                     update_joint_plots(loss_force_data, ess_data,
                                        force_plots['display_id'])
-                else:
-                    loss_data = LivePlotData(history['loss'],
-                                             plots['plot_obj1'])
-                    ess_data = LivePlotData(history['ess'],
-                                            plots['plot_obj2'])
-                    update_joint_plots(loss_data, ess_data,
-                                       plots['display_id'])
-
         dt = time.time() - t0
 
     outputs = {
