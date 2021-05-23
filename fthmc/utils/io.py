@@ -10,9 +10,12 @@ import os
 import shutil
 import joblib
 import torch
+import torch.nn as nn
 import numpy as np
 from typing import Union
 import datetime
+
+from fthmc.utils.param import Param
 
 WIDTH, HEIGHT = shutil.get_terminal_size(fallback=(156, 50))
 
@@ -96,14 +99,24 @@ class Logger:
 
         return outstr
 
+    def load_metrics(
+            self,
+            infile: str = None,
+    ):
+        """Try loading metrics from infile."""
+        return joblib.load(infile)
+
     def save_metrics(
             self,
             metrics: dict,
             outfile: str = None,
+            tstamp: str = None,
     ):
         """Save metrics to compressed `.z.` file."""
-        if outfile is None:
+        if tstamp is None:
             tstamp = get_timestamp('%Y-%m-%d-%H%M%S')
+
+        if outfile is None:
             outdir = os.path.join(os.getcwd(), tstamp)
             fname = 'metrics.z'
 
@@ -112,7 +125,7 @@ class Logger:
 
         check_else_make_dir(outdir)
         outfile = os.path.join(os.getcwd(), tstamp, 'metrics.z')
-
+        self.log(f'Saving metrics to: {outfile}')
         savez(metrics, outfile, name=fname.split('.')[0])
 
 
@@ -121,11 +134,62 @@ def check_else_make_dir(outdir):
         os.makedirs(outdir)
 
 
+def save_model(
+        param: Param,
+        model: nn.Module,
+        basedir: str = None,
+        name: str = None,
+        logger: Logger = None,
+):
+    if logger is None:
+        logger = Logger()
+
+    if basedir is None:
+        basedir = os.getcwd()
+
+    if name is None:
+        name = 'model_state_dict'
+
+    outdir = os.path.join(basedir, param.uniquestr())
+    check_else_make_dir(outdir)
+    outfile = os.path.join(outdir, f'{name}.pt')
+    logger.log(f'Saving model to: {outfile}')
+    torch.save(model.state_dict(), outfile)
+
+
+def load_model(
+        param: Param,
+        basedir: str = None,
+        name: str = None,
+        logger: Logger = None,
+        **kwargs,
+):
+    if logger is None:
+        logger = Logger()
+
+    if basedir is None:
+        basedir = os.getcwd()
+
+    if name is None:
+        name = 'model_state_dict'
+
+    outdir = os.path.join(basedir, param.uniquestr())
+    outfile = os.path.join(outdir, f'{name}.pt')
+    logger.log(f'Loading model from: {outfile}')
+    model = torch.load(outfile, **kwargs)
+
+    return model
+
+
+def loadz(infile: str):
+    return joblib.load(infile)
+
+
 def savez(obj: dict, fpath: str, name: str = None, logger=None):
     """Save `obj` to compressed `.z` file at `fpath`."""
     if logger is None:
         logger = Logger()
-    head, tail = os.path.split(fpath)
+    head, _ = os.path.split(fpath)
 
     check_else_make_dir(head)
 
@@ -187,31 +251,22 @@ def strformat(k, v, window: int = 0):
 
     if isinstance(v, (list, np.ndarray)):
         v = np.array(v)
-        #  v = np.array(v)
-        #  v = v.detach().numpy()
         if window > 0 and len(v.shape) > 0:
             window = min((v.shape[0], window))
             avgd = np.mean(v[-window:])
         else:
             avgd = np.mean(v)
 
-        #  outstr = f'{str(k)}={avgd:<5.4g}'
-
-        #  if len(v.shape) > 0:
-        #      epochs = min((v.shape[0], 5))
-        #      avgd = np.mean(v[-epochs:])
-        #  else:
-        #      avgd = np.mean(v)
-
-        outstr = f'{str(k)}={avgd:<5.4g}'
+        outstr = f'{str(k)}={avgd:<4}'
     else:
         if isinstance(v, float):
-            outstr = f'{str(k)}={v:<5.4g}'
+            outstr = f'{str(k)}={v:<4}'
         else:
             try:
-                outstr = f'{str(k)}={v:<5g}'
+                outstr = f'{str(k)}={v:<4}'
             except ValueError:
-                outstr = f'{str(k)}={v:<5}'
+                outstr = f'{str(k)}={v:<4}'
+
     return outstr
 
 def print_metrics(
@@ -234,7 +289,7 @@ def print_metrics(
     logger.log(outstr)
     if outfile is not None:
         with open(outfile, 'a') as f:
-            outfile.write(outstr)
+            f.write(outstr)
 
     return outstr
 

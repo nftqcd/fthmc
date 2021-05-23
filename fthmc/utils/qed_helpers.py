@@ -20,7 +20,7 @@ from math import pi as PI
 import torch
 import torch.nn as nn
 
-from utils.param import Param
+from fthmc.utils.param import Param
 
 TWO_PI = 2 * PI
 
