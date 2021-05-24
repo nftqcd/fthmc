@@ -331,41 +331,36 @@ def train_step(
                                       batch_size=batch_size, xi=xi)
     logp = (-1.) * action(x)
     dkl = calc_dkl(logp, logq)
+    loss = torch.tensor(0.0)
+    loss_dkl = torch.tensor(0.0)
+    loss_force = torch.tensor(0.0)
+
     ess = calc_ess(logp, logq)
     qi = qed.batch_charges(xi)
     q = qed.batch_charges(x)
     dq = (q - qi) ** 2
-
-    loss = torch.tensor(0.0)
-    loss_dkl = torch.tensor(0.0)
-    loss_force = torch.tensor(0.0)
-    observables = get_observables(param, x)
 
     if with_force:
         assert pre_model is not None
         force = qed.ft_force(param, layers, xi, True)
         force_norm = torch.linalg.norm(force)
         force_size = torch.sum(torch.square(force))
-        #  force = qed.ft_force(param, layers, xi, True)
-        #  force_size = torch.sum(torch.square(force))
         loss_force = force_size
-        #  loss_force.backward()
+        loss_force.backward()
     else:
         loss_dkl = dkl
-        #  loss_dkl.backward()
+        loss_dkl.backward()
 
-    loss = dkl_factor * loss_dkl + force_factor * loss_force
-    loss.backward()
     optimizer.step()
+    loss = dkl_factor * loss_dkl + force_factor * loss_force
+    #  loss.backward()
+    #  optimizer.step()
 
     batch_metrics = {
         'dt': time.time() - t0,
         'loss': grab(loss),
         'dq': grab(dq),
         'ess': grab(ess),
-        #  'action': grab(observables.action),
-        #  'charge': grab(observables.charge),
-        #'dkl': grab(dkl),
         'loss_dkl': dkl_factor * grab(loss_dkl),
         'logp': grab(logp),
         'logq': grab(logq),
@@ -492,11 +487,6 @@ def train(
     lr_force = config.base_lr / 100.0
     optimizer_force = optim.Adam(model['layers'].parameters(), lr=lr_force)
 
-    #  history = {
-    #      'era': [], 'epoch': [], 'dt': [], 'ess': [], 'loss': [],
-    #      'loss_force': [], 'force': [], 'force_norm': [],
-    #      'dkl': [], 'logp': [], 'logq': [],
-    #  }
     if history is None:
         history = {}
 
@@ -504,8 +494,6 @@ def train(
     plots = {}
     if interactive:
         plots = init_plots(config, param, figsize=figsize)
-
-
 
     dt = 0.0
     line = (io.WIDTH // 4) * '-'
@@ -543,7 +531,9 @@ def train(
             history = update_history(history, metrics, extras=step_info)
 
             if (epoch + 1) % config.print_freq == 0:
-                logger.print_metrics(history, window=min(epoch, 5))
+                running_avgs = io.running_averages(history,
+                                                   n_epochs=min(epoch, 5))
+                logger.print_metrics(running_avgs)#, window=min(epoch, 5))
 
             if (epoch + 1) % config.plot_freq == 0 and interactive:
                 dq_data = LivePlotData(np.mean(history['dq'], axis=-1),
@@ -571,8 +561,11 @@ def train(
         dt = time.time() - t0
 
     outputs = {
+        'plots': plots,
         'model': model,
         'history': history,
+        'optimizer_kdl': optimizer_kdl,
+        'optimizer_force': optimizer_force,
         'action': u1_action,
     }
 

@@ -116,7 +116,6 @@ class LatticeMetrics:
 
 
 
-#  @dataclass
 class BatchObservables:
     def __init__(self, beta: float = 1.):
         self.beta = beta

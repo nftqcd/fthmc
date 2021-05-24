@@ -3,7 +3,7 @@ io.py
 
 Contains helper functions for file IO.
 """
-from __future__ import absolute_import, print_function, division
+from __future__ import absolute_import, print_function, division, annotations
 from dataclasses import dataclass, asdict
 from functools import wraps
 import os
@@ -12,10 +12,11 @@ import joblib
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Union
+from typing import Union, Dict
 import datetime
 
 from fthmc.utils.param import Param
+
 
 WIDTH, HEIGHT = shutil.get_terminal_size(fallback=(156, 50))
 
@@ -28,6 +29,34 @@ def in_notebook():
     except ImportError:
         return False
     return True
+
+
+def check_else_make_dir(outdir):
+    if not os.path.isdir(outdir):
+        os.makedirs(outdir)
+
+
+def loadz(infile: str):
+    return joblib.load(infile)
+
+
+def savez(obj: dict, fpath: str, name: str = None, logger=None):
+    """Save `obj` to compressed `.z` file at `fpath`."""
+    if logger is None:
+        logger = Logger()
+    head, _ = os.path.split(fpath)
+
+    check_else_make_dir(head)
+
+    if not fpath.endswith('.z'):
+        fpath += '.z'
+
+    if name is not None:
+        logger.log(f'Saving {name} to {os.path.abspath(fpath)}.')
+    else:
+        logger.log(f'Saving {obj.__class__} to {os.path.abspath(fpath)}.')
+
+    joblib.dump(obj, fpath)
 
 
 # noqa: E999
@@ -130,32 +159,58 @@ class Logger:
         savez(metrics, outfile, name=fname.split('.')[0])
 
 
-def check_else_make_dir(outdir):
-    if not os.path.isdir(outdir):
-        os.makedirs(outdir)
+def rename_with_timestamp(
+    outfile: str,
+    fstr: str = None,
+    verbose: bool = True
+):
+    logger = Logger()
+    if fstr is None:
+        fstr = '%Y-%m-%d-%H%M%S'
+    head, tail = os.path.split(outfile)
+    fname, ext = tail.split('.')
+    tstamp = get_timestamp(fstr)
+    new_fname = f'{fname}_{tstamp}.{ext}'
+    outfile = os.path.join(head, new_fname)
+    if verbose:
+        logger.log('\n'.join([
+            f'Existing file found!',
+            f'Renaming outfile to: {outfile}',
+        ]))
+
+    return outfile
+
+def save_history(
+        history: dict[str, np.ndarray],
+        outfile: str,
+        name: str = None
+):
+    logger = Logger()
+    head, tail = os.path.split(outfile)
+    check_else_make_dir(head)
+    if os.path.isfile(outfile):
+        outfile = rename_with_timestamp(outfile)
+
+    savez(history, outfile, name=name)
 
 
 def save_model(
-        param: Param,
-        model: nn.Module,
-        basedir: str = None,
-        name: str = None,
-        logger: Logger = None,
+        model: Union[nn.Module, dict[str, nn.Module]],
+        outfile: str,
 ):
-    if logger is None:
-        logger = Logger()
-
-    if basedir is None:
-        basedir = os.getcwd()
-
-    if name is None:
-        name = 'model_state_dict'
-
-    outdir = os.path.join(basedir, param.uniquestr())
-    check_else_make_dir(outdir)
-    outfile = os.path.join(outdir, f'{name}.pt')
+    logger = Logger()
+    head, _ = os.path.split(outfile)
+    check_else_make_dir(head)
     logger.log(f'Saving model to: {outfile}')
-    torch.save(model.state_dict(), outfile)
+    if os.path.isfile(outfile):
+        outfile = rename_with_timestamp(outfile)
+
+    if isinstance(model, dict) and 'layers' in model:
+        torch.save(model['layers'].state_dict(), outfile)
+    elif isinstance(model, nn.Module):  # pylint:disable=module-not-found
+        torch.save(model.state_dict(), outfile)
+    else:
+        raise ValueError('Unable to save model.')
 
 
 def load_model(
@@ -180,29 +235,6 @@ def load_model(
     model = torch.load(outfile, **kwargs)
 
     return model
-
-
-def loadz(infile: str):
-    return joblib.load(infile)
-
-
-def savez(obj: dict, fpath: str, name: str = None, logger=None):
-    """Save `obj` to compressed `.z` file at `fpath`."""
-    if logger is None:
-        logger = Logger()
-    head, _ = os.path.split(fpath)
-
-    check_else_make_dir(head)
-
-    if not fpath.endswith('.z'):
-        fpath += '.z'
-
-    if name is not None:
-        logger.log(f'Saving {name} to {os.path.abspath(fpath)}.')
-    else:
-        logger.log(f'Saving {obj.__class__} to {os.path.abspath(fpath)}.')
-
-    joblib.dump(obj, fpath)
 
 
 def logit(logfile='out.log'):
@@ -271,12 +303,13 @@ def strformat(k, v, window: int = 0):
         return f'{str(k)}={v:<3}'
 
 
+
 def print_metrics(
-        metrics: dict,
-        pre: list = None,
-        logger: Logger = None,
-        outfile: str = None,
+        metrics: dict[str, np.ndarray],
+        pre: list[str] = None,
         window: int = 0,
+        outfile: str = None,
+        logger: Logger = None,
 ):
     if logger is None:
         logger = Logger()
@@ -296,7 +329,7 @@ def print_metrics(
     return outstr
 
 
-def get_timestamp(fstr=None):
+def get_timestamp(fstr: str = None):
     """Get formatted timestamp."""
     now = datetime.datetime.now()
     if fstr is None:

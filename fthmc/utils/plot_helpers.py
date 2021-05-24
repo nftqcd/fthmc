@@ -1,7 +1,9 @@
 from __future__ import absolute_import, division, print_function, annotations
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
-#  import seaborn as sns
+import seaborn as sns
 
 from fthmc.utils.param import Param
 import fthmc.utils.io as io
@@ -9,6 +11,100 @@ import fthmc.utils.io as io
 from fthmc.config import PlotObject, LivePlotData, TrainConfig
 
 from IPython.display import display
+
+logger = io.Logger()
+
+
+def therm_arr(
+        x: np.ndarray,
+        therm_frac: float = 0.1,
+        ret_steps: bool = True
+):
+    taxis = np.argmax(x.shape)
+    num_steps = x.shape[taxis]
+    therm_steps = int(therm_frac * num_steps)
+    x = np.delete(x, np.s_[:therm_steps], axis=taxis)
+    t = np.arange(therm_steps, num_steps)
+    if ret_steps:
+        return x, t
+    return x
+
+def savefig(fig: plt.Figure, outfile: str):
+    io.check_else_make_dir(os.path.dirname(outfile))
+    logger.log(f'Saving figure to: {outfile}')
+    fig.savefig(outfile, dpi=500, bbox_inches='tight')
+    fig.clf()
+    plt.close('all')
+
+
+def plot_metric(
+        metric: np.ndarray,
+        therm_frac: float = 0.,
+        outfile: str = None,
+        xlabel: str = None,
+        ylabel: str = None,
+        title: str = None,
+        figsize: tuple[int] = None,
+        num_chains: int = 10,
+        **kwargs,
+):
+    """Plot metric object."""
+    if figsize is None:
+        figsize = (4, 3)
+
+    metric = np.array(metric)
+    metric, steps = therm_arr(metric, therm_frac, ret_steps=True)
+    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
+    if len(metric.shape) == 1:
+        ax.plot(steps, metric, **kwargs)
+
+    if len(metric.shape) == 2:
+        for idx in range(num_chains):
+            y = metric[:, idx]
+            ax.plot(steps, y, **kwargs)
+
+    ax.grid(True, alpha=0.5)
+    if xlabel is None:
+        xlabel = 'Step'
+
+    ax.set_xlabel(xlabel)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel)
+
+    if title is not None:
+        ax.set_title(title)
+
+    if outfile is not None:
+        savefig(fig, outfile)
+
+    return fig, ax
+
+
+def plot_history(
+        param: Param,
+        history: dict[[str], np.ndarray],
+        therm_frac: float = 0.0,
+        xlabel: str = None,
+        title: str = None,
+        num_chains: int = 10,
+        outdir: str = None,
+):
+    for key, val in history.items():
+        outfile = None
+        if outdir is not None:
+            outfile = os.path.join(outdir, f'{key}.pdf')
+
+        if title is None:
+            title = param.uniquestr()
+
+        _ = plot_metric(val,
+                        ylabel=key,
+                        title=title,
+                        xlabel=xlabel,
+                        outfile=outfile,
+                        therm_frac=therm_frac,
+                        num_chains=num_chains)
+
 
 def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
     plots_dq = {}
@@ -218,28 +314,3 @@ def update_joint_plots(
     plot_obj2.ax.autoscale_view()
     fig.canvas.draw()
     display_id.update(fig)  # need to force colab to update plot
-    #  if x1.shape[0]
-    #  window = min((window, x1.shape[0]))
-    #  y1 = np.mean(x1[-window:], axis=0)
-    #  y2 = np.mean(x2[-window:], axis=0)
-    #x1 = np.array([np.stack(i) for i in x1])
-    #x2 = np.array([np.stack(i) for i in x2])
-    #  y1 = np.mean(x1[-min((window, x1.shape[0])):], keepdims=True)
-    #  y2 = np.mean(x2[-min((window, x2.shape[0])):], keepdims=True)
-    #  y1 = moving_average(np.array(x1), window=window)
-    #  y2 = moving_average(np.array(x2), window=window)
-
-    #  y = moving_average(y, window=window)
-    #  ess_line[0].set_ydata(y)
-    #  ess_line[0].set_xdata(np.arange(len(y)))
-    #  if alt_loss is not None:
-    #      y = history[str(alt_loss)]
-    #  else:
-    #      y = history['loss']
-    #
-    #  y = moving_average(y, window=window)
-    #  loss_line[0].set_ydata(np.array(y))
-    #  loss_line[0].set_xdata(np.arange(len(y)))
-    #  ax_loss.relim()
-    #  ax_loss.autoscale_view()
-    #  fig.canvas.draw()
