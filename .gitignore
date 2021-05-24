@@ -133,3 +133,6 @@ pyrightconfig.json
 typings
 .vim
 .vscode
+Untitled.ipynb
+old/
+logs/
