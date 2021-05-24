@@ -54,10 +54,12 @@ class Logger:
             # pylint:disable=import-outside-toplevel
             from rich.console import Console as RichConsole
             from rich.theme import Theme
-            theme = Theme({
-                'repr.number': 'bold bright_green',
-                'repr.attrib_name': 'bold bright_magenta'
-            })
+            theme = None
+            if in_notebook():
+                theme = Theme({
+                    'repr.number': 'bold bright_green',
+                    'repr.attrib_name': 'bold bright_magenta'
+                })
             console = RichConsole(record=False, log_path=False,
                                   force_jupyter=in_notebook(),
                                   log_time_format='[%X] ',

@@ -8,45 +8,84 @@ import fthmc.utils.io as io
 
 from fthmc.config import PlotObject, LivePlotData, TrainConfig
 
-#  from dataclasses import dataclass
-
-#  from typing import Any
-
 from IPython.display import display
 
-#  sns.set_palette('bright')
-
-
-#  @dataclass
-#  class PlotObject:
-#      ax: plt.Axes
-#      line: plt.Line2D
-#
-#
-#  @dataclass
-#  class LivePlotData:
-#      data: Any
-#      plot_obj: PlotObject
-#
-
 def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
-    plots = {}
-    force_plots = {}
+    plots_dq = {}
+    plots_dkl = {}
+    plots_force = {}
     if io.in_notebook():
-        y_label = ['loss', 'ESS']
-        plots = init_live_joint_plots(config.n_era, config.n_epoch,
-                                      dpi=500, figsize=figsize, param=param,
-                                      y_label=y_label)
+        ylabel_dq = ['dq', 'ESS']
+        plots_dq = init_live_joint_plots(config.n_era, config.n_epoch,
+                                         dpi=500, figsize=figsize, param=param,
+                                         ylabel=ylabel_dq)
+        ylabel_dkl = ['loss_dkl', 'ESS']
+        plots_dkl = init_live_joint_plots(config.n_era, config.n_epoch,
+                                          dpi=500, figsize=figsize, param=param,
+                                          ylabel=ylabel_dkl)
+
         if config.with_force:
-            force_label = ['loss_force', 'ESS']
-            force_plots = init_live_joint_plots(config.n_era,
+            ylabel_force = ['loss_force', 'ESS']
+            plots_force = init_live_joint_plots(config.n_era,
                                                 config.n_epoch, dpi=500,
                                                 figsize=figsize,
                                                 param=param,
-                                                y_label=force_label)
-    return plots, force_plots
+                                                ylabel=ylabel_force)
+
+    return {
+        'dq': plots_dq,
+        'dkl': plots_dkl,
+        'force': plots_force,
+    }
 
 
+def init_live_joint_plots(
+    n_era: int,
+    n_epoch: int,
+    dpi: int = 400,
+    figsize: tuple = (8, 4),
+    param: Param = None,
+    xlabel: str = None,
+    ylabel: list[str] = None,
+    colors: list[str] = None,
+):
+    if colors is None:
+        colors = ['C0', 'C1']
+
+    #  sns.set_style('ticks')
+    fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
+                            constrained_layout=True)
+    plt.xlim(0, n_era * n_epoch)
+    line0 = ax0.plot([0], [0], alpha=0.5, color='C0')
+    ax1 = ax0.twinx()
+    if ylabel is None:
+        ax0.set_ylabel('Loss', color=colors[0])
+        ax1.set_ylabel('ess', color=colors[1])
+
+    else:
+        ax0.set_ylabel(ylabel[0], color=colors[0])
+        ax1.set_ylabel(ylabel[1], color=colors[1])
+
+    ax0.tick_params(axis='y', labelcolor=colors[0])
+    ax0.grid(False)
+
+    line1 = ax1.plot([0], [0], alpha=0.5, c=colors[1])  # dummy
+
+    ax0.tick_params(axis='y', labelcolor=colors[0])
+    ax1.tick_params(axis='y', labelcolor=colors[1])
+    ax1.grid(False)
+    ax0.set_xlabel('Epoch' if xlabel is None else xlabel)
+    if param is not None:
+        fig.suptitle(param.uniquestr())
+
+    display_id = display(fig, display_id=True)
+    plot_obj1 = PlotObject(ax0, line0)
+    plot_obj2 = PlotObject(ax1, line1)
+    return {
+        'plot_obj1': plot_obj1,
+        'plot_obj2': plot_obj2,
+        'display_id': display_id
+    }
 
 
 def init_live_plot(
@@ -77,64 +116,14 @@ def init_live_plot(
     }
 
 
-def init_live_joint_plots(
-    n_era: int,
-    n_epoch: int,
-    dpi: int = 400,
-    figsize: tuple = (8, 4),
-    param: Param = None,
-    x_label: str = None,
-    y_label: list = None,
-    colors: list[str] = None,
-):
-    if colors is None:
-        colors = ['C0', 'C1']
-
-    #  sns.set_style('ticks')
-    fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
-                            constrained_layout=True)
-    plt.xlim(0, n_era * n_epoch)
-    line0 = ax0.plot([0], [0], alpha=0.5, color='C0')
-    ax1 = ax0.twinx()
-    if y_label is None:
-        ax0.set_ylabel('Loss', color=colors[0])
-        ax1.set_ylabel('ess', color=colors[1])
-
-    else:
-        ax0.set_ylabel(y_label[0], color=colors[0])
-        ax1.set_ylabel(y_label[1], color=colors[1])
-
-    ax0.tick_params(axis='y', labelcolor=colors[0])
-    ax0.grid(False)
-
-    line1 = ax1.plot([0], [0], alpha=0.5, c=colors[1])  # dummy
-
-    ax0.tick_params(axis='y', labelcolor=colors[0])
-    ax1.tick_params(axis='y', labelcolor=colors[1])
-    ax1.grid(False)
-    ax0.set_xlabel('Epoch' if x_label is None else x_label)
-    if param is not None:
-        fig.suptitle(param.uniquestr())
-
-    display_id = display(fig, display_id=True)
-    plot_obj1 = PlotObject(ax0, line0)
-    plot_obj2 = PlotObject(ax1, line1)
-    return {
-        'plot_obj1': plot_obj1,
-        'plot_obj2': plot_obj2,
-        'display_id': display_id
-    }
-
-
-
 def init_live_joint_plots1(
-    n_era: int,
-    n_epoch: int,
-    dpi: int = 125,
-    figsize: tuple = (8, 4),
-    param: Param = None,
-    x_label: str = None,
-    y_label: str = None,
+        n_era: int,
+        n_epoch: int,
+        dpi: int = 125,
+        figsize: tuple = (8, 4),
+        param: Param = None,
+        x_label: str = None,
+        y_label: str = None,
 ):
     #  sns.set_style('ticks')
     fig, ax_ess = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
@@ -175,7 +164,7 @@ def init_live_joint_plots1(
     }
 
 
-def moving_average(x, window=10):
+def moving_average(x: np.ndarray, window: int = 10):
     if len(x) < window:
         return np.mean(x, keepdims=True)
 
@@ -183,12 +172,12 @@ def moving_average(x, window=10):
 
 
 def update_plot(
-        y,
-        fig,
-        ax,
-        line,
-        display_id,
-        window=15,
+        y: np.ndarray,
+        fig: plt.Figure,
+        ax: plt.Axes,
+        line: list[plt.Line2D],
+        display_id: int,
+        window: int = 15,
 ):
     y = np.array(y)
     y = moving_average(y, window=window)
@@ -213,10 +202,11 @@ def update_joint_plots(
     plot_obj2 = plot_data2.plot_obj
 
     fig = plt.gcf()
-    y1 = moving_average(np.array(x1), window=window)
-    y2 = moving_average(np.array(x2), window=window)
 
-    #  y = moving_average(y, window=window)
+    x1 = np.array(x1).squeeze()
+    x2 = np.array(x2).squeeze()
+    y1 = moving_average(x1, window=window)
+    y2 = moving_average(x2, window=window)
     plot_obj2.line[0].set_ydata(y2)
     plot_obj2.line[0].set_xdata(np.arange(y2.shape[0]))
 
@@ -227,6 +217,19 @@ def update_joint_plots(
     plot_obj1.ax.autoscale_view()
     plot_obj2.ax.autoscale_view()
     fig.canvas.draw()
+    display_id.update(fig)  # need to force colab to update plot
+    #  if x1.shape[0]
+    #  window = min((window, x1.shape[0]))
+    #  y1 = np.mean(x1[-window:], axis=0)
+    #  y2 = np.mean(x2[-window:], axis=0)
+    #x1 = np.array([np.stack(i) for i in x1])
+    #x2 = np.array([np.stack(i) for i in x2])
+    #  y1 = np.mean(x1[-min((window, x1.shape[0])):], keepdims=True)
+    #  y2 = np.mean(x2[-min((window, x2.shape[0])):], keepdims=True)
+    #  y1 = moving_average(np.array(x1), window=window)
+    #  y2 = moving_average(np.array(x2), window=window)
+
+    #  y = moving_average(y, window=window)
     #  ess_line[0].set_ydata(y)
     #  ess_line[0].set_xdata(np.arange(len(y)))
     #  if alt_loss is not None:
@@ -240,4 +243,3 @@ def update_joint_plots(
     #  ax_loss.relim()
     #  ax_loss.autoscale_view()
     #  fig.canvas.draw()
-    display_id.update(fig)  # need to force colab to update plot

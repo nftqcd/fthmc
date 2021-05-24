@@ -311,7 +311,7 @@ def train_step(
         batch_size: int,
         with_force: bool = False,
         pre_model: dict[str, nn.Module] = None,
-        force_factor: float = 0.01,
+        force_factor: float = 1.,
         dkl_factor: float = 1.,
         #  verbose: bool = False,
 ):
@@ -360,18 +360,19 @@ def train_step(
 
     batch_metrics = {
         'dt': time.time() - t0,
-        'ess': grab(ess),
         'loss': grab(loss),
         'dq': grab(dq),
+        'ess': grab(ess),
         #  'action': grab(observables.action),
         #  'charge': grab(observables.charge),
-        'dkl': grab(dkl),
+        #'dkl': grab(dkl),
+        'loss_dkl': dkl_factor * grab(loss_dkl),
         'logp': grab(logp),
         'logq': grab(logq),
     }
     if with_force:
         batch_metrics.update({
-            'loss_force': grab(loss_force),
+            'loss_force': force_factor * grab(loss_force),
             'force_size': grab(force_size),
             'force_norm': grab(force_norm),
         })
@@ -500,9 +501,11 @@ def train(
         history = {}
 
     interactive = io.in_notebook()
-    plots = force_plots = {}
+    plots = {}
     if interactive:
-        plots, force_plots = init_plots(config, param, figsize=figsize)
+        plots = init_plots(config, param, figsize=figsize)
+
+
 
     dt = 0.0
     line = (io.WIDTH // 4) * '-'
@@ -543,19 +546,28 @@ def train(
                 logger.print_metrics(history, window=min(epoch, 5))
 
             if (epoch + 1) % config.plot_freq == 0 and interactive:
-                loss_data = LivePlotData(history['loss'],
-                                         plots['plot_obj1'])
+                dq_data = LivePlotData(np.mean(history['dq'], axis=-1),
+                                       plots['dq']['plot_obj1'])
                 ess_data = LivePlotData(history['ess'],
-                                        plots['plot_obj2'])
+                                        plots['dq']['plot_obj2'])
+                update_joint_plots(dq_data, ess_data,
+                                   plots['dq']['display_id'])
+
+                loss_data = LivePlotData(history['loss_dkl'],
+                                         plots['dkl']['plot_obj1'])
+                ess_data = LivePlotData(history['ess'],
+                                        plots['dkl']['plot_obj2'])
+
                 update_joint_plots(loss_data, ess_data,
-                                   plots['display_id'])
+                                   plots['dkl']['display_id'])
+
                 if config.with_force:
                     loss_force_data = LivePlotData(history['loss_force'],
-                                                   force_plots['plot_obj1'])
+                                                   plots['force']['plot_obj1'])
                     ess_data = LivePlotData(history['ess'],
-                                            force_plots['plot_obj2'])
+                                            plots['force']['plot_obj2'])
                     update_joint_plots(loss_force_data, ess_data,
-                                       force_plots['display_id'])
+                                       plots['force']['display_id'])
         dt = time.time() - t0
 
     outputs = {

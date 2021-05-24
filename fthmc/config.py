@@ -97,7 +97,7 @@ class TrainConfig:
 @dataclass
 class PlotObject:
     ax: plt.Axes
-    line: plt.Line2D
+    line: list[plt.Line2D]
 
 
 @dataclass
