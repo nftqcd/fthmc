@@ -1,7 +1,7 @@
 from __future__ import absolute_import, division, print_function, annotations
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
+#  import seaborn as sns
 
 from fthmc.utils.param import Param
 import fthmc.utils.io as io
@@ -14,7 +14,7 @@ from fthmc.config import PlotObject, LivePlotData, TrainConfig
 
 from IPython.display import display
 
-sns.set_palette('bright')
+#  sns.set_palette('bright')
 
 
 #  @dataclass
@@ -57,7 +57,7 @@ def init_live_plot(
         y_label=None,
         **kwargs
 ):
-    sns.set_style('ticks')
+    #  sns.set_style('ticks')
     fig, ax = plt.subplots(dpi=dpi, figsize=figsize, constrained_layout=True)
     line = ax.plot([0], [0], **kwargs)
     if param is not None:
@@ -90,7 +90,7 @@ def init_live_joint_plots(
     if colors is None:
         colors = ['C0', 'C1']
 
-    sns.set_style('ticks')
+    #  sns.set_style('ticks')
     fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
                             constrained_layout=True)
     plt.xlim(0, n_era * n_epoch)
@@ -136,7 +136,7 @@ def init_live_joint_plots1(
     x_label: str = None,
     y_label: str = None,
 ):
-    sns.set_style('ticks')
+    #  sns.set_style('ticks')
     fig, ax_ess = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
                                constrained_layout=True)
     plt.xlim(0, n_era * n_epoch)

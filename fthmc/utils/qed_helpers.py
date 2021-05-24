@@ -45,20 +45,8 @@ def torch_wrap(x):
     return torch_mod(x + PI) - PI
 
 
-def compute_u1_plaq(links, mu=0, nu=1):
-    """Compute U(1) plaqs in the (mu, nu) plane given `links` = arg(U)"""
-    if len(links.shape) == 4:
-        return (links[:, mu]
-                + torch.roll(links[:, nu], -1, mu + 1)
-                - torch.roll(links[:, mu], -1, nu + 1)
-                - links[:, nu])
-    return (links[mu, :]
-            + torch.roll(links[nu, :], -1, mu + 1)
-            - torch.roll(links[mu, :], -1, nu + 1)
-            - links[nu, :])
-
-
 def plaq_phase(f, mu=0, nu=1):
+    f = torch.squeeze(f)
     if len(f.shape) == 4:
         return (f[:, mu]
                 + torch.roll(f[:, nu], -1, mu + 1)
@@ -78,6 +66,93 @@ def topo_charge(x):
     return torch.sum(phase, dim=axes) / TWO_PI
 
 
+def compute_u1_plaq(links, mu=0, nu=1):
+    """Compute U(1) plaqs in the (mu, nu) plane given `links` = arg(U)"""
+    if len(links.shape) == 4:
+        return (links[:, mu]
+                - links[:, nu]
+                - torch.roll(links[:, mu], -1, nu + 1)
+                + torch.roll(links[:, nu], -1, mu + 1))
+    return (links[mu, :]
+            - links[nu, :]
+            - torch.roll(links[mu, :], -1, nu + 1)
+            + torch.roll(links[nu, :], -1, mu + 1))
+
+
+
+def batch_plaqs(x: torch.Tensor, mu: int = 0, nu: int = 1):
+    if len(x.shape) == 4:
+        # x.shape = (batch, Nd, Nt, Nx)
+        return (x[:, mu]
+                - x[:, nu]
+                - torch.roll(x[:, mu], -1, nu + 1)
+                + torch.roll(x[:, nu], -1, mu + 1))
+
+    return (x[mu, :],
+            - x[nu, :]
+            - torch.roll(x[mu, :], -1, nu + 1)
+            + torch.roll(x[nu, :], -1, mu + 1))
+
+
+def batch_charges(x: torch.Tensor = None, plaqs: torch.Tensor = None):
+    if plaqs is None:
+        if x is None:
+            raise ValueError('Either `x` or `plaq` must be specified.')
+
+        plaqs = torch_wrap(batch_plaqs(x, mu=0, nu=1))
+
+    axes = tuple(range(1, len(plaqs.shape)))
+    return torch.sum(plaqs, dim=axes) / TWO_PI
+
+
+from dataclasses import dataclass
+
+@dataclass
+class LatticeMetrics:
+    beta: float
+    plaqs: torch.Tensor
+    action: torch.Tensor
+    charges: torch.Tensor
+
+
+
+#  @dataclass
+class BatchObservables:
+    def __init__(self, beta: float = 1.):
+        self.beta = beta
+
+    def get_plaqs(self, x: torch.Tensor):
+        d = x.shape[1]
+        plaqs = 0
+        for mu in range(d):
+            for nu in range(mu + 1, d):
+                p = batch_plaqs(x, mu, nu)
+                plaqs += torch.cos(p)
+
+        return plaqs
+
+    def get_action(self, x: torch.Tensor = None, plaqs: torch.Tensor = None):
+        if x is None:
+            raise ValueError(f'Either `x` or `plaqs` must be specified.')
+
+        d = x.shape[1]
+        if plaqs is None:
+            plaqs = self.get_plaqs(x)
+
+        action = torch.sum(plaqs, dim=tuple(range(1, d+1)))
+        return (-self.beta) * action
+
+    def get_charges(self, x: torch.Tensor = None, plaqs: torch.Tensor = None):
+        return batch_charges(x=x, plaqs=plaqs)
+
+    def get_observables(self, x: torch.Tensor):
+        plaqs = self.get_plaqs(x)
+        action = self.get_action(plaqs=plaqs)
+        charges = self.get_charges(plaqs=plaqs)
+
+        return LatticeMetrics(self.beta, plaqs, action, charges)
+
+
 class BatchAction:
     def __init__(self, beta):
         self.beta = beta
@@ -91,7 +166,7 @@ class BatchAction:
                 action_density = action_density + torch.cos(plaq)
 
         action = torch.sum(action_density, dim=tuple(range(1, Nd+1)))
-        return - self.beta * action
+        return (-self.beta) * action
 
 
 from typing import List

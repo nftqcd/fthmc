@@ -80,14 +80,20 @@ class Logger:
         """Print `s` using `self.console` object."""
         self.console.log(s, *args, **kwargs)
 
+    def load_metrics(self, infile: str = None):
+        """Try loading metrics from infile."""
+        return joblib.load(infile)
+
     def print_metrics(
         self,
         metrics: dict,
+        window: int = 0,
         pre: list = None,
         outfile: str = None,
     ):
+        """Print nicely formatted string of summary of items in `metrics`."""
         outstr = ' '.join([
-            strformat(k, v) for k, v in metrics.items()
+            strformat(k, v, window) for k, v in metrics.items()
         ])
         if pre is not None:
             outstr = ' '.join([*pre, outstr])
@@ -98,13 +104,6 @@ class Logger:
                 f.write(outstr)
 
         return outstr
-
-    def load_metrics(
-            self,
-            infile: str = None,
-    ):
-        """Try loading metrics from infile."""
-        return joblib.load(infile)
 
     def save_metrics(
             self,
@@ -243,11 +242,14 @@ def strformat(k, v, window: int = 0):
     except AttributeError:
         pass
 
-    if isinstance(v, torch.Tensor):
-        v = v.detach().numpy()
+    if isinstance(v, int):
+        return f'{str(k)}={int(v)}'
 
     if isinstance(v, bool):
-        v = 'True' if v else 'False'
+        return f'{str(k)}=True' if v else f'{str(k)}=False'
+
+    if isinstance(v, torch.Tensor):
+        v = v.detach().numpy()
 
     if isinstance(v, (list, np.ndarray)):
         v = np.array(v)
@@ -257,17 +259,15 @@ def strformat(k, v, window: int = 0):
         else:
             avgd = np.mean(v)
 
-        outstr = f'{str(k)}={avgd:<4}'
-    else:
-        if isinstance(v, float):
-            outstr = f'{str(k)}={v:<4}'
-        else:
-            try:
-                outstr = f'{str(k)}={v:<4}'
-            except ValueError:
-                outstr = f'{str(k)}={v:<4}'
+        return f'{str(k)}={avgd:<4.3f}'
 
-    return outstr
+    if isinstance(v, float):
+        return f'{str(k)}={v:<4.3f}'
+    try:
+        return f'{str(k)}={v:<3g}'
+    except ValueError:
+        return f'{str(k)}={v:<3}'
+
 
 def print_metrics(
         metrics: dict,
@@ -280,7 +280,7 @@ def print_metrics(
         logger = Logger()
 
     outstr = ' '.join([
-        strformat(k, v) for k, v in metrics.items()
+        strformat(k, v, window=window) for k, v in metrics.items()
     ])
 
     if pre is not None:
