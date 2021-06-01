@@ -4,10 +4,12 @@ train.py
 End-to-end training example.
 """
 from __future__ import absolute_import, annotations, division, print_function
+from pathlib import Path
 
 import time
 #  from dataclasses import asdict, dataclass, field
 from math import pi as PI
+from typing import Union
 #  from typing import Callable
 
 import numpy as np
@@ -26,7 +28,9 @@ from fthmc.utils.distributions import (
 )
 from fthmc.utils.layers import make_u1_equiv_layers, set_weights
 from fthmc.utils.param import Param
-from fthmc.utils.plot_helpers import update_joint_plots, init_plots
+from fthmc.utils.plot_helpers import (
+    update_joint_plots, init_plots, update_plot,
+)
 from fthmc.utils.samplers import apply_flow_to_prior, make_mcmc_ensemble
 from fthmc.config import qedMetrics, State, ActionFn, TrainConfig, ftMetrics
 
@@ -152,6 +156,30 @@ def run(
     return x, metrics
 
 
+def update_history(
+        history: dict[str, list],
+        metrics: dict[str, list],
+        extras: dict = None
+):
+    def _check_add(d, k, v):
+        if isinstance(v, torch.Tensor):
+            v = grab(v)
+        try:
+            d[k].append(v)
+        except KeyError:
+            d[k] = [v]
+
+        return d
+
+    if extras is not None:
+        for key, val in extras.items():
+            history = _check_add(history, key, val)
+    for key, val in metrics.items():
+        history = _check_add(history, key, val)
+
+    return history
+
+
 def update_ft_metrics(metrics, metrics_):
     for key, val in metrics_.items():
         try:
@@ -168,10 +196,6 @@ def ft_leapfrog(param: Param, flow: list, x: torch.Tensor, p: torch.Tensor):
     dt = param.dt
     x = torch.squeeze(x)
     state = State(x, p)
-
-    #  x1 = x + 0.5 * dt * p
-    #  force = qed.ft_force(param, flow, x=x1)
-    #  p1 = p + (-dt) * force
 
     x = x + 0.5 * dt * p
     force = qed.ft_force(param, flow, x)
@@ -205,6 +229,7 @@ def ft_leapfrog(param: Param, flow: list, x: torch.Tensor, p: torch.Tensor):
 
     return State(x, p), metrics
 
+
 def ft_hmc(param: Param, flow: list, x: torch.Tensor):
     x = torch.squeeze(qed.ft_flow_inv(flow, x))
     p = torch.randn_like(x)
@@ -222,6 +247,7 @@ def ft_hmc(param: Param, flow: list, x: torch.Tensor):
     x_ = xr if acc else x
     field_ = qed.ft_flow(flow, x_)
     return (dH, expdH, acc, field_)
+
 
 def ft_run(
         param: Param,
@@ -278,31 +304,6 @@ def ft_run(
     return fields, metrics
 
 
-def update_history(
-        history: dict[str, list],
-        metrics: dict[str, list],
-        extras: dict = None
-):
-    def _check_add(d, k, v):
-        if isinstance(v, torch.Tensor):
-            v = grab(v)
-        try:
-            d[k].append(v)
-        except KeyError:
-            d[k] = [v]
-
-        return d
-
-    if extras is not None:
-        for key, val in extras.items():
-            history = _check_add(history, key, val)
-    for key, val in metrics.items():
-        history = _check_add(history, key, val)
-
-    return history
-
-
-
 def train_step(
         model: dict[str, nn.Module],
         param: Param,
@@ -313,9 +314,13 @@ def train_step(
         pre_model: dict[str, nn.Module] = None,
         force_factor: float = 1.,
         dkl_factor: float = 1.,
+        scaler: GradScaler = None,
         #  verbose: bool = False,
 ):
-    """Perform a single training step."""
+    """Perform a single training step.
+
+    TODO: Add `torch.device` to arguments for DDP.
+    """
     t0 = time.time()
     layers, prior = model['layers'], model['prior']
     optimizer.zero_grad()
@@ -327,17 +332,23 @@ def train_step(
         x = qed.ft_flow(pre_layers, pre_xi)
         xi = qed.ft_flow_inv(layers, x)
 
-    xi, x, logq = apply_flow_to_prior(prior, layers,
-                                      batch_size=batch_size, xi=xi)
+    xi, x, logq = apply_flow_to_prior(prior, layers, xi=xi,
+                                      batch_size=batch_size)
     logp = (-1.) * action(x)
     dkl = calc_dkl(logp, logq)
-    loss = torch.tensor(0.0)
+
+    #  loss = torch.tensor(0.0)
     loss_dkl = torch.tensor(0.0)
     loss_force = torch.tensor(0.0)
+    if torch.cuda.is_available():
+        loss_dkl.cuda()
+        loss_force.cuda()
 
     ess = calc_ess(logp, logq)
     qi = qed.batch_charges(xi)
     q = qed.batch_charges(x)
+    plaq = logp / (param.beta * param.volume)
+    #  action = action(x) / (-param.beta * param.volume)
     dq = (q - qi) ** 2
 
     if with_force:
@@ -345,23 +356,35 @@ def train_step(
         force = qed.ft_force(param, layers, xi, True)
         force_norm = torch.linalg.norm(force)
         force_size = torch.sum(torch.square(force))
-        loss_force = force_size
-        loss_force.backward()
+        loss_force = force_factor * force_size
+        if scaler is not None:
+            scaler.scale(loss_force).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss_force.backward()
     else:
-        loss_dkl = dkl
-        loss_dkl.backward()
+        loss_dkl = dkl_factor * dkl
+        if scaler is not None:
+            scaler.scale(loss_dkl).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss_dkl.backward()
 
     optimizer.step()
-    loss = dkl_factor * loss_dkl + force_factor * loss_force
+    loss = loss_dkl + loss_force
     #  loss.backward()
     #  optimizer.step()
 
     batch_metrics = {
         'dt': time.time() - t0,
         'loss': grab(loss),
+        'q': grab(q),
         'dq': grab(dq),
         'ess': grab(ess),
-        'loss_dkl': dkl_factor * grab(loss_dkl),
+        'plaq': grab(plaq),
+        'loss_dkl': grab(loss_dkl),
         'logp': grab(logp),
         'logq': grab(logq),
     }
@@ -375,81 +398,56 @@ def train_step(
     return batch_metrics
 
 
-def train_step_alt(
-        model: dict[str, nn.Module],
-        param: Param,
-        action: ActionFn,
-        optimizer: optim.Optimizer,
-        batch_size: int,
-        with_force: bool = False,
-        pre_model: dict[str, nn.Module] = None,
-        #  verbose: bool = False,
-        force_factor: float = 0.01,
-        dkl_factor: float = 1.,
+def running_averages(
+    history: dict[str, np.ndarray],
+    n_epochs: int = 10,
 ):
-    """Perform a single training step."""
-    t0 = time.time()
-    layers, prior = model['layers'], model['prior']
-    optimizer.zero_grad()
+    avgs = {}
+    for key, val in history.items():
+        val = np.array(val)
+        if len(val.shape) > 0:
+            avgd = np.mean(val[-n_epochs:])
+        else:
+            avgd = np.mean(val)
 
-    xi = None
-    if pre_model is not None:
-        pre_layers, pre_prior = pre_model['layers'], pre_model['prior']
-        pre_xi = pre_prior.sample_n(batch_size)
-        x = qed.ft_flow(pre_layers, pre_xi)
-        xi = qed.ft_flow_inv(layers, x)
+        avgs[key] = avgd
 
-    xi, x, logq = apply_flow_to_prior(prior, layers,
-                                      batch_size=batch_size, xi=xi)
-    logp = (-1.) * action(x)
-    dkl = calc_dkl(logp, logq)
-    loss_dkl = torch.tensor(0.0)
+    return avgs
 
-    ess = calc_ess(logp, logq)
 
-    force_size = torch.tensor(0.0)
-    loss_force = torch.tensor(0.0)
-    loss = torch.tensor(0.0)
-    force = qed.ft_force(param, layers, xi, True)
-    force_norm = torch.linalg.norm(force)
-    force_size = torch.sum(torch.square(force))
 
-    loss_dkl = dkl_factor * dkl
-    if with_force:
-        assert pre_model is not None
-        loss_force = force_factor * force_size
+def get_model(param: Param, config: TrainConfig):
+    lattice_shape = tuple(param.lat)
+    link_shape = (2, *param.lat)
 
-    #  loss = dkl_factor * loss_dkl + force_factor * loss_force
-    loss = loss_dkl + loss_force
-    loss.backward()
+    prior = MultivariateUniform(torch.zeros((2, *param.lat)),
+                                TWO_PI * torch.ones(tuple(param.lat)))
+    layers = make_u1_equiv_layers(lattice_shape=lattice_shape,
+                                  n_layers=config.n_layers,
+                                  n_mixture_comps=config.n_s_nets,
+                                  hidden_sizes=config.hidden_sizes,
+                                  kernel_size=config.kernel_size)
+    set_weights(layers)
 
-    #  if with_force:
-    #      assert pre_model is not None
-    #      #  force = qed.ft_force(param, layers, xi, True)
-    #      #  force_size = torch.sum(torch.square(force))
-    #      loss_force = force_size
-    #      #  loss_force.backward()
-    #  else:
-    #      #  loss_dkl = dkl
-    #      #  loss_dkl.backward()
-    #
-    #  loss = loss_dkl + loss_force
+    return {'layers': layers, 'prior': prior}
 
-    optimizer.step()
-    batch_metrics = {
-        'dt': time.time() - t0,
-        'loss': grab(loss),
-        'ess': grab(ess),
-        'loss_force': grab(loss_force),
-        'force_size': grab(force_size),
-        'force_norm': grab(force_norm),
-        'dkl': grab(dkl),
-        'logp': grab(logp),
-        'logq': grab(logq),
-    }
 
-    return batch_metrics
+def restore_model_from_checkpoint(
+        infile: Union[str, Path],
+        param: Param,
+        train_config: TrainConfig,
+):
+    logger.log(f'Loading checkpoint from: {infile}')
+    checkpoint = torch.load(infile)
+    model = get_model(param, train_config)
+    optimizer = optim.Adam(
+        model['layers'].parameters(),
+        lr=train_config.base_lr
+    )
 
+    model['layers'].load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    return {'model': model, 'optimizer': optimizer}
 
 
 def train(
@@ -459,7 +457,6 @@ def train(
         pre_model: dict[str, nn.Module] = None,
         figsize: tuple = (8, 3),
         logger: io.Logger = None,
-        use_alt: bool = False,
         force_factor: float = 0.01,
         dkl_factor: float = 1.,
         history: dict[[str], list] = None,
@@ -469,23 +466,19 @@ def train(
         logger = io.Logger()
 
     if model is None:
-        lattice_shape = tuple(param.lat)
-        link_shape = (2, *param.lat)
-        prior = MultivariateUniform(torch.zeros(link_shape),
-                                    TWO_PI * torch.ones(link_shape))
-        layers = make_u1_equiv_layers(lattice_shape=lattice_shape,
-                                      n_layers=config.n_layers,
-                                      n_mixture_comps=config.n_s_nets,
-                                      hidden_sizes=config.hidden_sizes,
-                                      kernel_size=config.kernel_size)
-        set_weights(layers)
-        model = {'layers': layers, 'prior': prior}
+        model = get_model(param, config)
+
+    if torch.cuda.is_available():
+        model['layers'].cuda()
+        model['prior'].cuda()
 
     u1_action = qed.BatchAction(param.beta)
 
-    optimizer_kdl = optim.Adam(model['layers'].parameters(), lr=config.base_lr)
+    optimizer_kdl = optim.Adam(model['layers'].parameters(),
+                               lr=config.base_lr, weight_decay=1e-5)
     lr_force = config.base_lr / 100.0
-    optimizer_force = optim.Adam(model['layers'].parameters(), lr=lr_force)
+    optimizer_force = optim.Adam(model['layers'].parameters(),
+                                 lr=lr_force, weight_decay=1e-5)
 
     if history is None:
         history = {}
@@ -502,52 +495,48 @@ def train(
         tprev = f'last took: {int(dt // 60)} min {dt % 60:.4g} s'
         logger.log('\n'.join([line, f'ERA={era}, {tprev}', line]))
         for epoch in range(config.n_epoch):
-            if use_alt:
-                metrics = train_step_alt(model, param,
-                                         u1_action,
-                                         optimizer_kdl,
-                                         config.batch_size,
-                                         config.with_force,
-                                         pre_model=pre_model,
-                                         force_factor=force_factor,
-                                         dkl_factor=dkl_factor)
-            else:
-                if config.with_force:
-                    metrics = train_step(model, param,
-                                         u1_action,
-                                         optimizer_force,
-                                         config.batch_size,
-                                         config.with_force,
-                                         pre_model=pre_model)
-                else:
-                    metrics = train_step(model, param,
-                                         u1_action,
-                                         optimizer_kdl,
-                                         config.batch_size,
-                                         config.with_force,
-                                         pre_model=pre_model)
+            metrics = train_step(model, param,
+                                 u1_action,
+                                 optimizer_kdl,
+                                 config.batch_size,
+                                 config.with_force,
+                                 pre_model=pre_model,
+                                 dkl_factor=dkl_factor,
+                                 force_factor=force_factor)
 
-            step_info = {'epoch': int(epoch)}
+            if config.with_force:
+                metrics = train_step(model, param,
+                                     u1_action,
+                                     optimizer_force,
+                                     config.batch_size,
+                                     config.with_force,
+                                     pre_model=pre_model,
+                                     dkl_factor=dkl_factor,
+                                     force_factor=force_factor)
+
+            step_info = {'epoch': int(epoch), 'step': int(epoch * era)}
             history = update_history(history, metrics, extras=step_info)
 
             if (epoch + 1) % config.print_freq == 0:
-                running_avgs = io.running_averages(history,
-                                                   n_epochs=min(epoch, 5))
-                logger.print_metrics(running_avgs)#, window=min(epoch, 5))
+                running_avgs = running_averages(history,
+                                                n_epochs=min(epoch, 5))
+                logger.print_metrics(running_avgs, skip=['q'])
 
             if (epoch + 1) % config.plot_freq == 0 and interactive:
-                dq_data = LivePlotData(np.mean(history['dq'], axis=-1),
-                                       plots['dq']['plot_obj1'])
-                ess_data = LivePlotData(history['ess'],
-                                        plots['dq']['plot_obj2'])
-                update_joint_plots(dq_data, ess_data,
-                                   plots['dq']['display_id'])
+                #  dq = np.array(history['dq'])
+                #  window = min((epoch, 10))
+
+                #  dq = np.array(history['dq'])[-window:]
+                update_plot(y=np.array(history['dq']).mean(axis=-1),
+                            ax=plots['dq']['ax'],
+                            fig=plots['dq']['fig'],
+                            line=plots['dq']['line'],
+                            display_id=plots['dq']['display_id'])
 
                 loss_data = LivePlotData(history['loss_dkl'],
                                          plots['dkl']['plot_obj1'])
                 ess_data = LivePlotData(history['ess'],
                                         plots['dkl']['plot_obj2'])
-
                 update_joint_plots(loss_data, ess_data,
                                    plots['dkl']['display_id'])
 
@@ -572,29 +561,3 @@ def train(
     return outputs
 
 
-def generate_ensemble(
-        model: nn.Module,
-        action: ActionFn = qed.BatchAction,
-        ensemble_size: int = 1024,
-        batch_size: int = 64,
-        nboot: int = 100,
-        binsize: int = 16,
-        logger: io.Logger = None,
-):
-    """Calculate the topological susceptibility by generating an ensemble."""
-    if logger is None:
-        logger = io.Logger()
-
-    ensemble = make_mcmc_ensemble(model, action, batch_size, ensemble_size)
-    charge = grab(qed.topo_charge(torch.stack(ensemble['x'], dim=0)))
-    xmean, xerr = bootstrap(charge ** 2, nboot=nboot, binsize=binsize)
-
-    logger.log(f'accept_rate={np.mean(ensemble["accepted"])}')
-    logger.log(f'top_susceptibility={xmean:.5f} +/- {xerr:.5f}')
-
-    return {
-        'ensemble': ensemble,
-        'charge': charge,
-        'suscept_mean': xmean,
-        'suscept_err': xerr,
-    }

@@ -1,18 +1,24 @@
 from __future__ import absolute_import, division, print_function, annotations
+import torch
 import os
+from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+from pathlib import Path
 
 from fthmc.utils.param import Param
 import fthmc.utils.io as io
 
 from fthmc.config import PlotObject, LivePlotData, TrainConfig
 
-from IPython.display import display
+from IPython.display import display, DisplayHandle
 
 logger = io.Logger()
+
+PathLike = Union[str, Path]
+Metric = Union[list, np.ndarray, torch.Tensor]
 
 
 def therm_arr(
@@ -20,7 +26,8 @@ def therm_arr(
         therm_frac: float = 0.1,
         ret_steps: bool = True
 ):
-    taxis = np.argmax(x.shape)
+    #  taxis = np.argmax(x.shape)
+    taxis = 0
     num_steps = x.shape[taxis]
     therm_steps = int(therm_frac * num_steps)
     x = np.delete(x, np.s_[:therm_steps], axis=taxis)
@@ -29,39 +36,88 @@ def therm_arr(
         return x, t
     return x
 
-def savefig(fig: plt.Figure, outfile: str):
+
+def grab(x: torch.Tensor):
+    return x.detach().cpu().numpy()
+
+
+def list_to_arr(x: list):
+    return np.array([grab(torch.stack(i)) for i in x])
+
+
+def savefig(fig: plt.Figure, outfile: str, dpi: int = 500):
     io.check_else_make_dir(os.path.dirname(outfile))
+    outfile = io.rename_with_timestamp(outfile, fstr='%H%M%S')
     logger.log(f'Saving figure to: {outfile}')
-    fig.savefig(outfile, dpi=500, bbox_inches='tight')
-    fig.clf()
-    plt.close('all')
+    #  fig.clf()
+    #  plt.close('all')
+    fig.savefig(outfile, dpi=dpi, bbox_inches='tight')
+
+
+def save_live_plots(plots: dict, outdir: PathLike):
+    if isinstance(outdir, Path):
+        outdir = str(outdir)
+
+    io.check_else_make_dir(outdir)
+
+    dqf = os.path.join(outdir, 'dq_training.pdf')
+    savefig(plots['dq']['fig'], dqf)
+
+    dklf = os.path.join(outdir, 'loss_dkl_ess_training.pdf')
+    savefig(plots['dkl']['fig'], dklf)
+
+    if 'force' in plots and 'fig' in plots['force']:
+        ff = os.path.join(outdir, 'loss_force_training.pdf')
+        savefig(plots['force']['fig'], ff)
 
 
 def plot_metric(
-        metric: np.ndarray,
-        therm_frac: float = 0.,
-        outfile: str = None,
+        metric: Metric,
+        title: str = None,
         xlabel: str = None,
         ylabel: str = None,
-        title: str = None,
-        figsize: tuple[int] = None,
+        hline: bool = False,
+        thin: int = 0,
         num_chains: int = 10,
+        therm_frac: float = 0.,
+        outfile: PathLike = None,
+        figsize: tuple[int] = None,
         **kwargs,
 ):
     """Plot metric object."""
     if figsize is None:
         figsize = (4, 3)
 
-    metric = np.array(metric)
-    metric, steps = therm_arr(metric, therm_frac, ret_steps=True)
-    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
-    if len(metric.shape) == 1:
-        ax.plot(steps, metric, **kwargs)
+    if isinstance(metric, torch.Tensor):
+        metric = metric.cpu().numpy()
 
-    if len(metric.shape) == 2:
+    elif isinstance(metric, list):
+        if len(metric) == 1:
+            metric = np.array([grab(metric[0])])
+        else:
+            if isinstance(metric[0], torch.Tensor):
+                metric = list_to_arr(metric)
+
+    metric = np.array(metric)
+    if thin > 0:
+        metric = metric[::thin]
+
+    metric, steps = therm_arr(metric, therm_frac, ret_steps=True)
+
+    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
+    if len(metric.squeeze().shape) == 1:
+        label = kwargs.pop('label', None)
+        ax.plot(steps, metric, label=label, **kwargs)
+
+    if len(metric.squeeze().shape) == 2:
         for idx in range(num_chains):
             y = metric[:, idx]
             ax.plot(steps, y, **kwargs)
+
+    if hline:
+        avg = np.mean(metric)
+        label = f'avg: {avg:.4g}'
+        ax.axhline(avg, label=label, **kwargs)
 
     ax.grid(True, alpha=0.5)
     if xlabel is None:
@@ -80,16 +136,24 @@ def plot_metric(
     return fig, ax
 
 
+
 def plot_history(
+        history: dict[str, np.ndarray],
         param: Param,
-        history: dict[[str], np.ndarray],
         therm_frac: float = 0.0,
         xlabel: str = None,
         title: str = None,
         num_chains: int = 10,
         outdir: str = None,
+        skip: list[str] = None,
+        thin: int = 0,
+        hline: bool = False,
+        **kwargs,
 ):
     for key, val in history.items():
+        if skip is not None and key in skip:
+            continue
+
         outfile = None
         if outdir is not None:
             outfile = os.path.join(outdir, f'{key}.pdf')
@@ -102,8 +166,9 @@ def plot_history(
                         title=title,
                         xlabel=xlabel,
                         outfile=outfile,
+                        thin=thin,
                         therm_frac=therm_frac,
-                        num_chains=num_chains)
+                        num_chains=num_chains, **kwargs)
 
 
 def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
@@ -111,10 +176,9 @@ def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
     plots_dkl = {}
     plots_force = {}
     if io.in_notebook():
-        ylabel_dq = ['dq', 'ESS']
-        plots_dq = init_live_joint_plots(config.n_era, config.n_epoch,
-                                         dpi=500, figsize=figsize, param=param,
-                                         ylabel=ylabel_dq)
+        plots_dq = init_live_plot(dpi=500, figsize=figsize, param=param,
+                                  ylabel='dq', xlabel='Epoch')
+
         ylabel_dkl = ['loss_dkl', 'ESS']
         plots_dkl = init_live_joint_plots(config.n_era, config.n_epoch,
                                           dpi=500, figsize=figsize, param=param,
@@ -146,13 +210,13 @@ def init_live_joint_plots(
     colors: list[str] = None,
 ):
     if colors is None:
-        colors = ['C0', 'C1']
+        colors = ['#0096ff', '#f92672']
 
     #  sns.set_style('ticks')
     fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
                             constrained_layout=True)
     plt.xlim(0, n_era * n_epoch)
-    line0 = ax0.plot([0], [0], alpha=0.5, color='C0')
+    line0 = ax0.plot([0], [0], alpha=0.5, c=colors[0])
     ax1 = ax0.twinx()
     if ylabel is None:
         ax0.set_ylabel('Loss', color=colors[0])
@@ -178,6 +242,9 @@ def init_live_joint_plots(
     plot_obj1 = PlotObject(ax0, line0)
     plot_obj2 = PlotObject(ax1, line1)
     return {
+        'fig': fig,
+        'ax0': ax0,
+        'ax1': ax1,
         'plot_obj1': plot_obj1,
         'plot_obj2': plot_obj2,
         'display_id': display_id
@@ -188,21 +255,22 @@ def init_live_plot(
         dpi=125,
         figsize=(8, 4),
         param=None,
-        x_label=None,
-        y_label=None,
+        xlabel=None,
+        ylabel=None,
         **kwargs
 ):
+    color = kwargs.pop('color', '#0096FF')
+    xlabel = 'Epoch' if xlabel is None else xlabel
     #  sns.set_style('ticks')
     fig, ax = plt.subplots(dpi=dpi, figsize=figsize, constrained_layout=True)
-    line = ax.plot([0], [0], **kwargs)
+    line = ax.plot([0], [0], c=color, **kwargs)
     if param is not None:
         _ = fig.suptitle(param.uniquestr())
 
-    if x_label is not None:
-        _ = ax.set_xlabel(x_label)
+    if ylabel is not None:
+        _ = ax.set_ylabel(ylabel, color=color)
 
-    if y_label is not None:
-        _ = ax.set_ylabel(y_label)
+    ax.tick_params(axis='y', labelcolor=color)
 
     _ = ax.autoscale(True, axis='y')
     #  plt.Axes.autoscale(True, axis='y')
@@ -212,73 +280,27 @@ def init_live_plot(
     }
 
 
-def init_live_joint_plots1(
-        n_era: int,
-        n_epoch: int,
-        dpi: int = 125,
-        figsize: tuple = (8, 4),
-        param: Param = None,
-        x_label: str = None,
-        y_label: str = None,
-):
-    #  sns.set_style('ticks')
-    fig, ax_ess = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
-                               constrained_layout=True)
-    plt.xlim(0, n_era * n_epoch)
-    plt.ylim(0, 1)
-
-    ess_line = ax_ess.plot([0], [0], alpha=0.5, color='C0')  # dummyZ
-    if y_label is None:
-        _ = ax_ess.set_ylabel('ESS', color='C0')
-    else:
-        _ = ax_ess.set_ylabel(y_label[0], color='C0')
-
-    _ = ax_ess.tick_params(axis='y', labelcolor='C0')
-    _ = ax_ess.grid(False)
-
-    ax_loss = ax_ess.twinx()
-    loss_line = ax_loss.plot([0], [0], alpha=0.5, c='C1')  # dummy
-    if y_label is None:
-        _ = ax_loss.set_ylabel('Loss', color='C1')
-    else:
-        _ = ax_loss.set_ylabel(y_label[1], color='C1')
-
-    _ = ax_loss.tick_params(axis='y', labelcolor='C1')
-    _ = ax_loss.grid(False)
-    _ = ax_loss.set_xlabel('Epoch' if x_label is None else x_label)
-    if param is not None:
-        _ = fig.suptitle(param.uniquestr())
-
-    display_id = display(fig, display_id=True)
-    return {
-        'fig': fig,
-        'ax_ess': ax_ess,
-        'ax_loss': ax_loss,
-        'ess_line': ess_line,
-        'loss_line': loss_line,
-        'display_id': display_id
-    }
-
-
 def moving_average(x: np.ndarray, window: int = 10):
-    if len(x) < window:
+    #  if len(x) < window:
+    if x.shape[0] < window:
         return np.mean(x, keepdims=True)
 
     return np.convolve(x, np.ones(window), 'valid') / window
 
 
 def update_plot(
-        y: np.ndarray,
+        y: Metric,
         fig: plt.Figure,
         ax: plt.Axes,
         line: list[plt.Line2D],
-        display_id: int,
+        display_id: DisplayHandle,
         window: int = 15,
 ):
     y = np.array(y)
-    y = moving_average(y, window=window)
+    yavg = moving_average(y, window=window)
     line[0].set_ydata(y)
-    line[0].set_xdata(np.arange(len(y)))
+    line[0].set_xdata(np.arange(y.shape[0]))
+    #  line[0].set_xdata(np.arange(len(yavg)))
     ax.relim()
     ax.autoscale_view()
     fig.canvas.draw()
@@ -288,7 +310,7 @@ def update_plot(
 def update_joint_plots(
         plot_data1: LivePlotData,
         plot_data2: LivePlotData,
-        display_id,
+        display_id: DisplayHandle,
         window=15,
         alt_loss=None,
 ):

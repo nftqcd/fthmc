@@ -9,6 +9,7 @@ License: CC BY 4.0
 
 With slight modifications by Xiao-Yong Jin to reduce global variables
 """
+from __future__ import absolute_import, division, print_function, annotations
 
 import math
 import os
@@ -19,6 +20,7 @@ from timeit import default_timer as timer
 import numpy as np
 import packaging.version
 import torch
+import torch.nn as nn
 
 from utils.qed_helpers import compute_u1_plaq
 
@@ -36,58 +38,100 @@ print(f'TORCH DEVICE: {torch_device}')
 #  torch_device = 'cpu'
 #  float_dtype = np.float64
 
-def torch_mod(x):
+def torch_mod(x: torch.Tensor):
     return torch.remainder(x, 2*np.pi)
 
 
-def torch_wrap(x):
+def torch_wrap(x: torch.Tensor):
     return torch_mod(x+np.pi) - np.pi
 
 
-def grab(var):
+def grab(var: torch.Tensor):
     return var.detach().cpu().numpy()
 
 
-def print_metrics(history, avg_last_n_epochs=10, era=None, epoch=None):
-    outstr = []
-
-    if era is not None:
-        outstr.append(f'era: {era}')
-    if epoch is not None:
-        outstr.append(f'epoch: {epoch}')
-
-    for key, val in history.items():
-        val = np.array(val)
-        if len(val.shape) > 0:
-            avgd = np.mean(val[-avg_last_n_epochs:])
-        else:
-            avgd = np.mean(val)
-        outstr.append(f'{key}: {avgd:g}')
-
-    print(', '.join(outstr))
+def get_nets(layers: nn.Module):
+    return [l.plaq_coupling.net for l in layers]
 
 
-def make_conv_net(*, hidden_sizes, kernel_size, in_channels, out_channels, use_final_tanh):
+def stack_cos_sin(x: torch.Tensor):
+    return torch.stack((torch.cos(x), torch.sin(x)), dim=1)
+
+
+def tan_transform(x: torch.Tensor, s: torch.Tensor):
+    return torch_mod(2*torch.atan(torch.exp(s)*torch.tan(x/2)))
+
+
+def tan_transform_logJ(x: torch.Tensor, s: torch.Tensor):
+    return -torch.log(
+        torch.exp(-s)*torch.cos(x/2)**2
+        + torch.exp(s)*torch.sin(x/2)**2
+    )
+
+
+def mixture_tan_transform(x: torch.Tensor, s: torch.Tensor):
+    cond = (len(x.shape) == len(s.shape))
+    assert cond, f'Dimension mismatch between x and s: {x.shape}, vs {s.shape}'
+    return torch.mean(tan_transform(x, s), dim=1, keepdim=True)
+
+
+def mixture_tan_transform_logJ(x: torch.Tensor, s: torch.Tensor):
+    cond = (len(x.shape) == len(s.shape))
+    assert cond, f'Dimension mismatch between x and s: {x.shape}, vs {s.shape}'
+    return (
+        torch.logsumexp(tan_transform_logJ(x, s), dim=1)
+        - np.log(s.shape[1])
+    )
+
+
+def make_net_from_layers(*, lattice_shape: tuple[int], nets: list[nn.Module]):
+    n_layers = len(nets)
+    layers = []
+    for i in range(n_layers):
+        # periodically loop through all arrangements of maskings
+        mu = i % 2
+        off = (i // 2) % 4
+        net = nets[i]
+        plaq_coupling = NCPPlaqCouplingLayer(
+            net, mask_shape=lattice_shape, mask_mu=mu, mask_off=off
+        )
+        link_coupling = GaugeEquivCouplingLayer(
+            lattice_shape=lattice_shape, mask_mu=mu, mask_off=off,
+            plaq_coupling=plaq_coupling
+        )
+        layers.append(link_coupling)
+
+    return nn.ModuleList(layers)
+
+
+def make_conv_net(
+        *,
+        hidden_sizes: list[int],
+        kernel_size: int,
+        in_channels: int,
+        out_channels: int,
+        use_final_tanh: bool = False,
+):
     sizes = [in_channels] + hidden_sizes + [out_channels]
     assert packaging.version.parse(torch.__version__) >= packaging.version.parse('1.5.0')
     assert kernel_size % 2 == 1, 'kernel size must be odd for PyTorch >= 1.5.0'
     padding_size = (kernel_size // 2)
     net = []
     for i in range(len(sizes) - 1):
-        net.append(torch.nn.Conv2d(
+        net.append(nn.Conv2d(
             sizes[i], sizes[i+1], kernel_size, padding=padding_size,
             stride=1, padding_mode='circular'))
         if i != len(sizes) - 2:
-            net.append(torch.nn.SiLU())
+            net.append(nn.SiLU())
         else:
             if use_final_tanh:
-                net.append(torch.nn.Tanh())
-    return torch.nn.Sequential(*net)
+                net.append(nn.Tanh())
+    return nn.Sequential(*net)
 
 
 def set_weights(m):
     if hasattr(m, 'weight') and m.weight is not None:
-        torch.nn.init.normal_(m.weight, mean=1, std=2)
+        nn.init.normal_(m.weight, mean=1, std=2)
     if hasattr(m, 'bias') and m.bias is not None:
         m.bias.data.fill_(-1)
 
@@ -103,7 +147,7 @@ def random_gauge_transform(x):
     return gauge_transform(x, 2*np.pi*torch.rand((Nconf,) + VolShape))
 
 
-class GaugeEquivCouplingLayer(torch.nn.Module):
+class GaugeEquivCouplingLayer(nn.Module):
     """U(1) gauge equiv coupling layer defined by `plaq_coupling` acting on plaquettes."""
     def __init__(self, *, lattice_shape, mask_mu, mask_off, plaq_coupling):
         super().__init__()
@@ -175,6 +219,7 @@ def make_single_stripes(shape, mu, off):
         mask[0::4] = 1
     mask = np.roll(mask, off, axis=1-mu)
     return torch.from_numpy(mask).to(torch_device)
+
 def make_double_stripes(shape, mu, off):
     """
     Double stripes mask looks like::
@@ -208,27 +253,6 @@ def make_plaq_masks(mask_shape, mask_mu, mask_off):
     mask['passive'] = 1 - mask['frozen'] - mask['active']
     return mask
 
-
-def tan_transform(x, s):
-    return torch_mod(2*torch.atan(torch.exp(s)*torch.tan(x/2)))
-
-
-def tan_transform_logJ(x, s):
-    return -torch.log(torch.exp(-s)*torch.cos(x/2)**2 + torch.exp(s)*torch.sin(x/2)**2)
-
-
-def mixture_tan_transform(x, s):
-    assert len(x.shape) == len(s.shape), \
-        f'Dimension mismatch between x and s {x.shape} vs {s.shape}'
-    return torch.mean(tan_transform(x, s), dim=1, keepdim=True)
-
-
-def mixture_tan_transform_logJ(x, s):
-    assert len(x.shape) == len(s.shape), \
-        f'Dimension mismatch between x and s {x.shape} vs {s.shape}'
-    return torch.logsumexp(tan_transform_logJ(x, s), dim=1) - np.log(s.shape[1])
-
-
 def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=2*np.pi):
     min_x = a*torch.ones_like(y)
     max_x = b*torch.ones_like(y)
@@ -254,14 +278,18 @@ def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=2*np.pi):
         return mid_x
 
 
-def stack_cos_sin(x):
-    return torch.stack((torch.cos(x), torch.sin(x)), dim=1)
 
-
-
-class NCPPlaqCouplingLayer(torch.nn.Module):
-    def __init__(self, net, *, mask_shape, mask_mu, mask_off,
-                 inv_prec=1e-6, inv_max_iter=1000):
+class NCPPlaqCouplingLayer(nn.Module):
+    def __init__(
+        self,
+        net: nn.Module,
+        *,
+        mask_shape: tuple[int],
+        mask_mu: int,
+        mask_off: int,
+        inv_prec: float = 1e-6,
+        inv_max_iter: int = 1000
+    ):
         super().__init__()
         assert len(mask_shape) == 2, (
             f'NCPPlaqCouplingLayer is implemented only in 2D, '
@@ -270,11 +298,20 @@ class NCPPlaqCouplingLayer(torch.nn.Module):
         self.net = net
         self.inv_prec = inv_prec
         self.inv_max_iter = inv_max_iter
+        if torch.cuda.is_available():
+            self.net = self.net.cuda()
+            for key, val in self.mask.items():
+                val = val.cuda()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
+        if torch.cuda.is_available():
+            x = x.cuda()
+
         x2 = self.mask['frozen'] * x
         net_out = self.net(stack_cos_sin(x2))
-        assert net_out.shape[1] >= 2, 'CNN must output n_mix (s_i) + 1 (t) channels'
+        cond = net_out.shape[1] >= 2
+        assert cond, 'CNN must output n_mix (s_i) + 1 (t) channels'
+
         s, t = net_out[:,:-1], net_out[:,-1]
 
         x1 = self.mask['active'] * x
@@ -290,7 +327,7 @@ class NCPPlaqCouplingLayer(torch.nn.Module):
             self.mask['frozen'] * x)
         return fx, logJ
 
-    def reverse(self, fx):
+    def reverse(self, fx: torch.Tensor):
         fx2 = self.mask['frozen'] * fx
         net_out = self.net(stack_cos_sin(fx2))
         assert net_out.shape[1] >= 2, 'CNN must output n_mix (s_i) + 1 (t) channels'
@@ -306,13 +343,21 @@ class NCPPlaqCouplingLayer(torch.nn.Module):
         x1 = x1.squeeze(1)
 
         x = (
-            self.mask['active'] * x1 +
-            self.mask['passive'] * fx +
-            self.mask['frozen'] * fx2)
+            self.mask['active'] * x1
+            + self.mask['passive'] * fx
+            + self.mask['frozen'] * fx2
+        )
         return x, logJ
 
 
-def make_u1_equiv_layers(*, n_layers, n_mixture_comps, lattice_shape, hidden_sizes, kernel_size):
+def make_u1_equiv_layers(
+        *,
+        n_layers,
+        n_mixture_comps,
+        lattice_shape,
+        hidden_sizes,
+        kernel_size
+):
     layers = []
     for i in range(n_layers):
         # periodically loop through all arrangements of maskings
@@ -329,4 +374,4 @@ def make_u1_equiv_layers(*, n_layers, n_mixture_comps, lattice_shape, hidden_siz
             lattice_shape=lattice_shape, mask_mu=mu, mask_off=off,
             plaq_coupling=plaq_coupling)
         layers.append(link_coupling)
-    return torch.nn.ModuleList(layers)
+    return nn.ModuleList(layers)
