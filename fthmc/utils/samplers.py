@@ -49,8 +49,8 @@ def generate_ensemble(
         logger = io.Logger()
 
     history = make_mcmc_ensemble(model, action, batch_size, ensemble_size)
-    qsq_mean, qsq_err = bootstrap(history['q'] ** 2,
-                                  nboot=nboot, binsize=binsize)
+    qarr = np.array([grab(i) for i in history['q']])
+    qsq_mean, qsq_err = bootstrap(qarr ** 2, nboot=nboot, binsize=binsize)
     #  charge = grab(qed.topo_charge(torch.stack(ensemble['x'], dim=0)))
     #  xmean, xerr = bootstrap(charge ** 2, nboot=nboot, binsize=binsize)
 
@@ -58,7 +58,8 @@ def generate_ensemble(
     logger.log(f'top_susceptibility={qsq_mean:.5f} +/- {qsq_err:.5f}')
 
     return {
-        'ensemble': history,
+        'history': history,
+        #  'ensemble': history,
         'suscept_mean': qsq_mean,
         'suscept_err': qsq_err,
     }
