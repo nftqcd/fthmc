@@ -20,6 +20,7 @@ from math import pi as PI
 import torch
 import torch.nn as nn
 
+from typing import List
 from fthmc.utils.param import Param
 
 TWO_PI = 2 * PI
@@ -168,7 +169,6 @@ class BatchAction:
         return (-self.beta) * action
 
 
-from typing import List
 Flow = List[torch.nn.Module]
 
 def ft_flow(flow: Flow, x: torch.Tensor):
@@ -192,7 +192,7 @@ def ft_flow_inv(flow: list[nn.Module], x: torch.Tensor):
     return x.detach()
 
 
-def ft_action(param, flow, f):
+def ft_action(param: Param, flow: torch.Tensor, f: torch.Tensor):
     y = f
     logdet = 0.
     for layer in flow:
@@ -205,7 +205,12 @@ def ft_action(param, flow, f):
     return s
 
 
-def ft_force(param, flow, field, create_graph=False):
+def ft_force(
+        param: Param,
+        flow: nn.Module,
+        field: torch.Tensor,
+        create_graph=False
+):
     """Field transformation force.
 
     Note: f is the field follows the transformed distribution (close to prior)

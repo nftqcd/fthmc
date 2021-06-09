@@ -14,6 +14,7 @@ import torch.nn as nn
 import numpy as np
 from typing import Union, Dict
 import datetime
+from pathlib import Path
 
 from fthmc.utils.param import Param
 
@@ -33,6 +34,7 @@ def in_notebook():
 
 def check_else_make_dir(outdir):
     if not os.path.isdir(outdir):
+        Logger().log(f'Creating directory: {outdir}')
         os.makedirs(outdir)
 
 
@@ -73,12 +75,12 @@ class Console:
 class Logger:
     """Logger class for pretty printing metrics during training/testing."""
     def __init__(self, width=None):
-        if width is None:
-            if in_notebook():
-                width = 256
-            else:
-                width = WIDTH
-
+        #  if width is None:
+        #      if in_notebook():
+        #          #  width = 256
+        #      else:
+        #          width = WIDTH
+        #
         try:
             # pylint:disable=import-outside-toplevel
             from rich.console import Console as RichConsole
@@ -92,7 +94,7 @@ class Logger:
             console = RichConsole(record=False, log_path=False,
                                   force_jupyter=in_notebook(),
                                   log_time_format='[%X] ',
-                                  theme=theme, width=width)
+                                  theme=theme)#, width=width)
         except (ImportError, ModuleNotFoundError):
             console = Console()
 
@@ -101,7 +103,7 @@ class Logger:
 
     def rule(self, s: str, *args, **kwargs):
         """Print horizontal line."""
-        width = kwargs.pop('width', self.width)
+        #  width = kwargs.pop('width', self.width)
         w = self.width - (8 + len(s))
         hw = w // 2
         rule = ' '.join((hw * '-', f'{s}', hw * '-'))
@@ -121,10 +123,15 @@ class Logger:
         window: int = 0,
         pre: list = None,
         outfile: str = None,
+        skip: list[str] = None,
     ):
         """Print nicely formatted string of summary of items in `metrics`."""
+        if skip is None:
+            skip = []
+
         outstr = ' '.join([
             strformat(k, v, window) for k, v in metrics.items()
+            if k not in skip
         ])
         if pre is not None:
             outstr = ' '.join([*pre, outstr])
@@ -165,8 +172,12 @@ def rename_with_timestamp(
     verbose: bool = True
 ):
     logger = Logger()
+    if not os.path.isfile(outfile):
+        return outfile
+
     if fstr is None:
         fstr = '%Y-%m-%d-%H%M%S'
+
     head, tail = os.path.split(outfile)
     fname, ext = tail.split('.')
     tstamp = get_timestamp(fstr)
@@ -185,13 +196,52 @@ def save_history(
         outfile: str,
         name: str = None
 ):
-    logger = Logger()
     head, tail = os.path.split(outfile)
     check_else_make_dir(head)
     if os.path.isfile(outfile):
         outfile = rename_with_timestamp(outfile)
 
     savez(history, outfile, name=name)
+
+
+import torch.optim as optim
+
+
+def save_checkpoint(
+        epoch: int,
+        model: nn.Module,
+        optimizer: optim.Optimizer,
+        outfile: Union[str, Path],
+        history: dict[str, list] = None,
+        overwrite: bool = False,
+):
+    logger = Logger()
+    outfile = os.path.abspath(str(outfile))
+    head, _ = os.path.split(outfile)
+    check_else_make_dir(head)
+    if os.path.isfile(outfile) and not overwrite:
+        outfile = rename_with_timestamp(outfile)
+
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+    }
+
+    if history is not None:
+        checkpoint.update({'history': history})
+
+    logger.log(f'Saving checkpoint to: {outfile}')
+    torch.save(checkpoint, outfile)
+
+
+def load_checkpoint(
+        infile: str,
+):
+    Logger().log(f'Loading checkpoint from: {infile}')
+    checkpoint = torch.load(infile)
+
+    return checkpoint
 
 
 def save_model(
@@ -201,13 +251,13 @@ def save_model(
     logger = Logger()
     head, _ = os.path.split(outfile)
     check_else_make_dir(head)
-    logger.log(f'Saving model to: {outfile}')
     if os.path.isfile(outfile):
         outfile = rename_with_timestamp(outfile)
 
+    logger.log(f'Saving model to: {outfile}')
     if isinstance(model, dict) and 'layers' in model:
         torch.save(model['layers'].state_dict(), outfile)
-    elif isinstance(model, nn.Module):  # pylint:disable=module-not-found
+    elif isinstance(model, nn.Module):
         torch.save(model.state_dict(), outfile)
     else:
         raise ValueError('Unable to save model.')
@@ -251,23 +301,6 @@ def logit(logfile='out.log'):
             return func(*args, **kwargs)
         return wrapped_function
     return logging_decorator
-
-
-def running_averages(
-    history: dict,
-    n_epochs: int = 10,
-):
-    avgs = {}
-    for key, val in history.items():
-        val = np.array(val)
-        if len(val.shape) > 0:
-            avgd = np.mean(val[-n_epochs:])
-        else:
-            avgd = np.mean(val)
-
-        avgs[key] = avgd
-
-    return avgs
 
 
 def strformat(k, v, window: int = 0):

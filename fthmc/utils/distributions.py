@@ -26,7 +26,10 @@ def calc_ess(logp, logq):
     logw = logp - logq
     log_ess = (2 * torch.logsumexp(logw, dim=0)
                - torch.logsumexp(2 * logw, dim=0))
-    ess_per_cfg = torch.exp(log_ess) / len(logw)
+
+    ess_per_cfg = torch.exp(log_ess)
+    if len(logw.shape) > 0:
+        ess_per_cfg /= logw.shape[0]
 
     return ess_per_cfg
 

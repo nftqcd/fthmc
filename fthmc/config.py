@@ -96,6 +96,7 @@ class TrainConfig:
 
 @dataclass
 class PlotObject:
+    #  fig: plt.Figure
     ax: plt.Axes
     line: list[plt.Line2D]
 
@@ -104,4 +105,3 @@ class PlotObject:
 class LivePlotData:
     data: Any
     plot_obj: PlotObject
-
