@@ -54,10 +54,11 @@ def run_hmc(
         for i in range(param.ntraj):
             t1 = time.time()
             xb = x[None, :]
-
             q0 = qed.batch_charges(xb)
+
             dH, expdH, acc, x = qed.hmc(param, x, verbose=False)
-            q1 = qed.batch_charges(xb)
+
+            q1 = qed.batch_charges(x[None, :])
             dqsq = (q1 - q0) ** 2,
 
             logp = (-1.) * action(xb)
