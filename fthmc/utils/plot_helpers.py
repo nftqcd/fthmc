@@ -43,7 +43,13 @@ def grab(x: torch.Tensor):
 
 
 def list_to_arr(x: list):
-    return np.array([grab(torch.stack(i)) for i in x])
+    try:
+        return np.array([grab(torch.stack(i)) for i in x])
+    except TypeError:
+        return np.array([
+            grab(i) if isinstance(i, torch.Tensor) else i
+            for i in x
+        ])
 
 
 def savefig(fig: plt.Figure, outfile: str, dpi: int = 500):

@@ -10,7 +10,7 @@ import fthmc.utils.qed_helpers as qed
 
 
 def grab(x: torch.Tensor):
-    if isinstance(x, np.ndarray, np.float32, np.float64):
+    if isinstance(x, (np.ndarray, np.float32, np.float64)):
         return x
     return x.detach().cpu().numpy()
 
@@ -128,7 +128,12 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
             history['x'].append(x_new)
             history['accepted'].append(accepted)
 
+    history_ = {}
     for key, val in history.items():
+        #  history_[key] = np.array(np.stack([
+        #      grab(x) if isinstance(x, torch.Tensor) else x
+        #      for x in val
+        #  ]))
         try:
             arr = np.array(val)
         except TypeError:
@@ -137,6 +142,6 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
                 for x in val
             ]))
 
-        history[key] = arr
+        history_[key] = arr
 
     return history

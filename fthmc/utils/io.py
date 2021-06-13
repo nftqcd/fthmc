@@ -83,17 +83,19 @@ def save_history(
 
 
 
-OptimizerObject = Union[
-    optim.Optimizer,
-    dict[str, optim.Optimizer],
-    Union[tuple[optim.Optimizer], list[optim.Optimizer]],
-]
+OptimizerDict = "dict[str, optim.Optimizer]"
+OptimizerList = "Union[tuple[optim.Optimizer], list[optim.Optimizer]]"
+#  OptimizerObject: Union = [
+#      optim.Optimizer,
+#      dict[str, optim.Optimizer],
+#      Union[tuple[optim.Optimizer], list[optim.Optimizer]],
+#  ]
 
 def save_checkpoint(
         era: int,
         epoch: int,
         model: nn.Module,
-        optimizer: OptimizerObject,
+        optimizer: Union[optim.Optimizer, OptimizerDict, OptimizerList],
         outdir: Union[str, Path],
         history: dict[str, list] = None,
         overwrite: bool = False,
