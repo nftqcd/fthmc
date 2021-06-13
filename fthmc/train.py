@@ -4,6 +4,8 @@ train.py
 End-to-end training example.
 """
 from __future__ import absolute_import, annotations, division, print_function
+from dataclasses import asdict
+import os
 from pathlib import Path
 
 import time
@@ -26,20 +28,22 @@ import fthmc.utils.qed_helpers as qed
 from fthmc.utils.distributions import (
     MultivariateUniform, bootstrap, calc_dkl, calc_ess
 )
-from fthmc.utils.layers import make_u1_equiv_layers, set_weights
+from fthmc.utils.layers import get_nets, make_net_from_layers, make_u1_equiv_layers, set_weights
 from fthmc.utils.param import Param
 from fthmc.utils.plot_helpers import (
-    update_joint_plots, init_plots, update_plot,
+    plot_history, save_live_plots, update_joint_plots, init_plots, update_plot,
 )
 from fthmc.utils.samplers import apply_flow_to_prior, make_mcmc_ensemble
 from fthmc.config import qedMetrics, State, ActionFn, TrainConfig, ftMetrics
+from fthmc.utils.logger import Logger, check_else_make_dir, in_notebook, get_timestamp
 
 
 #  LossFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-NOW = io.get_timestamp('%Y-%m-%d-%H%M%S')
+NOW = get_timestamp('%Y-%m-%d-%H%M%S')
 METRIC_NAMES = ['dt', 'accept', 'traj', 'dH', 'expdH', 'plaq', 'charge']
 
-logger = io.Logger()
+#  logger = io.Logger()
+logger = Logger()
 TWO_PI = 2 * PI
 
 def grab(x: torch.Tensor):
@@ -95,65 +99,6 @@ def get_ft_metrics(
         'ft_action': ft_action,
         'p_norm': p_norm,
     }
-
-
-def run(
-        param: Param,
-        x: torch.Tensor = None,
-        keep_fields: bool = False,
-        logger: io.Logger = None
-):
-    """Run generic HMC."""
-    if x is None:
-        x = param.initializer()
-
-    fields_arr = []
-    metrics = {k: [] for k in METRIC_NAMES}
-    logger.log(repr(param))
-    observables = get_observables(param, x)
-    logger.print_metrics(observables._metrics)
-    history = {}
-    for n in range(param.nrun):
-        t0 = time.time()
-        fields = []
-        for i in range(param.ntraj):
-            t1 = time.time()
-            q0 = qed.batch_charges(x[None, :])
-            dH, expdH, acc, x = qed.hmc(param, x, verbose=False)
-            q1 = qed.batch_charges(x[None, :])
-            metrics = {
-                'dt': time.time() - t1,
-                'traj': n * param.ntraj + i + 1,
-                'accept': 'True' if acc else 'False',
-                'dH': dH,
-                'expdH': expdH,
-                'dq': (q1 - q0) ** 2,
-                #  'action': observables.action,
-                #  'plaq': observables.plaq,
-                #  'charge': observables.charge,
-            }
-            if (i - 1) % (param.ntraj // param.nprint) == 0:
-                _ = logger.print_metrics(metrics)
-
-            fields.append(x)
-
-        #  if keep_fields:
-        history = update_history(history, metrics,
-                                 extras={'run': n})
-        fields_arr.append(fields)
-
-        dt = time.time() - t0
-        history['dt'].append(dt)
-        #  for key, val in traj_metrics.items():
-
-    dt = history['dt']
-    logger.log(f'Run times: {[np.round(t, 6) for t in dt]}')
-    logger.log(f'Per trajectory: {[np.round(t / param.ntraj, 6) for t in dt]}')
-
-    if keep_fields:
-        return fields_arr, metrics
-
-    return x, metrics
 
 
 def update_history(
@@ -349,7 +294,7 @@ def train_step(
     q = qed.batch_charges(x)
     plaq = logp / (param.beta * param.volume)
     #  action = action(x) / (-param.beta * param.volume)
-    dq = (q - qi) ** 2
+    dqsq = (q - qi) ** 2
 
     if with_force:
         assert pre_model is not None
@@ -381,7 +326,7 @@ def train_step(
         'dt': time.time() - t0,
         'loss': grab(loss),
         'q': grab(q),
-        'dq': grab(dq),
+        'dqsq': grab(dqsq),
         'ess': grab(ess),
         'plaq': grab(plaq),
         'loss_dkl': grab(loss_dkl),
@@ -406,9 +351,11 @@ def running_averages(
     for key, val in history.items():
         val = np.array(val)
         if len(val.shape) > 0:
-            avgd = np.mean(val[-n_epochs:])
+            avgd = val[-n_epochs:].mean()
+            #  avgd = np.mean(val[-n_epochs:])
         else:
-            avgd = np.mean(val)
+            avgd = val.mean()
+            #  avgd = np.mean(val)
 
         avgs[key] = avgd
 
@@ -440,9 +387,10 @@ def restore_model_from_checkpoint(
     logger.log(f'Loading checkpoint from: {infile}')
     checkpoint = torch.load(infile)
     model = get_model(param, train_config)
-    optimizer = optim.Adam(
+    optimizer = optim.AdamW(
         model['layers'].parameters(),
-        lr=train_config.base_lr
+        lr=train_config.base_lr,
+        weight_decay=1e-5,
     )
 
     model['layers'].load_state_dict(checkpoint['model_state_dict'])
@@ -455,16 +403,13 @@ def train(
         config: TrainConfig,
         model: dict[str, nn.Module] = None,
         pre_model: dict[str, nn.Module] = None,
-        figsize: tuple = (8, 3),
-        logger: io.Logger = None,
+        figsize: tuple = (5, 2),
         force_factor: float = 0.01,
         dkl_factor: float = 1.,
         history: dict[[str], list] = None,
+        #  outdir: Union[str, Path] = None,
 ):
     """Train the flow model."""
-    if logger is None:
-        logger = io.Logger()
-
     if model is None:
         model = get_model(param, config)
 
@@ -472,32 +417,59 @@ def train(
         model['layers'].cuda()
         model['prior'].cuda()
 
+    logdir = io.get_logdir(param, config)
+    train_dir = os.path.join(logdir, 'training')
+    if os.path.isdir(train_dir):
+        train_dir = io.tstamp_dir(train_dir)
+
+    dirs = {
+        'logdir': logdir,
+        'training': train_dir,
+        'plots': os.path.join(train_dir, 'plots'),
+        'ckpts': os.path.join(train_dir, 'checkpoints'),
+    }
+    check_else_make_dir(list(dirs.values()))
+
     u1_action = qed.BatchAction(param.beta)
 
-    optimizer_kdl = optim.Adam(model['layers'].parameters(),
-                               lr=config.base_lr, weight_decay=1e-5)
-    lr_force = config.base_lr / 100.0
-    optimizer_force = optim.Adam(model['layers'].parameters(),
-                                 lr=lr_force, weight_decay=1e-5)
+    optimizer_dkl = optim.AdamW(model['layers'].parameters(),
+                                lr=config.base_lr, weight_decay=1e-5)
+
+    optimizer_force = None
+    if force_factor > 0:
+        lr_force = config.base_lr / 100.0
+        optimizer_force = optim.AdamW(model['layers'].parameters(),
+                                      lr=lr_force, weight_decay=1e-5)
 
     if history is None:
         history = {}
 
-    interactive = io.in_notebook()
+    if config.with_force and force_factor > 0:
+        optimizer = optimizer_force
+    else:
+        optimizer = optimizer_dkl
+
+    interactive = in_notebook()
     plots = {}
     if interactive:
         plots = init_plots(config, param, figsize=figsize)
 
     dt = 0.0
-    line = (io.WIDTH // 4) * '-'
+    step = 0
+    #  line = (io.WIDTH // 4) * '-'
+    print_freq = min((config.print_freq, config.n_epoch))
+    plot_freq = min((config.plot_freq, config.n_epoch))
+    ckpt_files = []
     for era in range(config.n_era):
         t0 = time.time()
-        tprev = f'last took: {int(dt // 60)} min {dt % 60:.4g} s'
-        logger.log('\n'.join([line, f'ERA={era}, {tprev}', line]))
+        estr = f'ERA={era}, last took: {int(dt // 60)} min {dt%60:.4g} sec'
+        line = len(estr) * '-'
+        logger.log('\n'.join([line, estr, line]))
         for epoch in range(config.n_epoch):
+            step += 1
             metrics = train_step(model, param,
                                  u1_action,
-                                 optimizer_kdl,
+                                 optimizer,
                                  config.batch_size,
                                  config.with_force,
                                  pre_model=pre_model,
@@ -507,31 +479,32 @@ def train(
             if config.with_force:
                 metrics = train_step(model, param,
                                      u1_action,
-                                     optimizer_force,
+                                     optimizer,
                                      config.batch_size,
                                      config.with_force,
                                      pre_model=pre_model,
                                      dkl_factor=dkl_factor,
                                      force_factor=force_factor)
 
-            step_info = {'epoch': int(epoch), 'step': int(epoch * era)}
+            step_info = {'epoch': int(epoch+2), 'step': int(step+1)}
             history = update_history(history, metrics, extras=step_info)
 
-            if (epoch + 1) % config.print_freq == 0:
-                running_avgs = running_averages(history,
-                                                n_epochs=min(epoch, 5))
+            if step % print_freq == 0:
+                window = min(epoch, 5)
+                running_avgs = running_averages(history, n_epochs=window)
                 logger.print_metrics(running_avgs, skip=['q'])
 
-            if (epoch + 1) % config.plot_freq == 0 and interactive:
+            #  if (epoch + 1) % config.plot_freq == 0 and interactive:
+            if step % plot_freq == 0 and interactive:
                 #  dq = np.array(history['dq'])
                 #  window = min((epoch, 10))
 
                 #  dq = np.array(history['dq'])[-window:]
-                update_plot(y=np.array(history['dq']).mean(axis=-1),
-                            ax=plots['dq']['ax'],
-                            fig=plots['dq']['fig'],
-                            line=plots['dq']['line'],
-                            display_id=plots['dq']['display_id'])
+                update_plot(y=np.array(history['dqsq']).mean(axis=-1),
+                            ax=plots['dqsq']['ax'],
+                            fig=plots['dqsq']['fig'],
+                            line=plots['dqsq']['line'],
+                            display_id=plots['dqsq']['display_id'])
 
                 loss_data = LivePlotData(history['loss_dkl'],
                                          plots['dkl']['plot_obj1'])
@@ -547,17 +520,61 @@ def train(
                                             plots['force']['plot_obj2'])
                     update_joint_plots(loss_force_data, ess_data,
                                        plots['force']['display_id'])
+
         dt = time.time() - t0
+        #  if outdir is not None:
+        ckpt_file = io.save_checkpoint(era=era, epoch=epoch+1,
+                                       model=model['layers'],
+                                       outdir=dirs['ckpts'],
+                                       history=history,
+                                       optimizer=optimizer)
+        ckpt_files.append(ckpt_file)
+
+
+    ckpt_file = io.save_checkpoint(era=era, epoch=epoch+1,
+                                   model=model['layers'],
+                                   history=history,
+                                   outdir=dirs['ckpts'],
+                                   optimizer=optimizer)
+
+    save_live_plots(plots, dirs['plots'])
+    plot_history(history, param=param, config=config,
+                 skip=['epoch', 'step'],
+                 num_chains=2, thin=0,
+                 therm_frac=0.0, alpha=0.8,
+                 xlabel='Epoch', outdir=dirs['plots'])
+
+    hfile = os.path.join(train_dir, 'train_history.z')
+    io.save_history(history, hfile, name='train_history')
 
     outputs = {
         'plots': plots,
+        'dirs': dirs,
         'model': model,
         'history': history,
-        'optimizer_kdl': optimizer_kdl,
-        'optimizer_force': optimizer_force,
+        'optimizer': optimizer,
+        #  'optimizer_kdl': ,
+        #  'optimizer_force': optimizer_force,
         'action': u1_action,
     }
 
     return outputs
 
 
+def transfer_to_new_lattice(
+        L: int,
+        layers: nn.ModuleList,
+        param_init: Param,
+        #  config: TrainConfig
+):
+    pdict = asdict(param_init)
+    pdict['L'] = L
+    param = Param(**pdict)
+    flow = make_net_from_layers(nets=get_nets(layers),
+                                lattice_shape=tuple(param.lat))
+
+    prior = MultivariateUniform(torch.zeros((2, *param.lat)),
+                                TWO_PI * torch.ones(tuple(param.lat)))
+    model = {'layers': flow, 'prior': prior}
+
+    return {'param': param, 'model': model}

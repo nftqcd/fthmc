@@ -10,6 +10,8 @@ import fthmc.utils.qed_helpers as qed
 
 
 def grab(x: torch.Tensor):
+    if isinstance(x, np.ndarray, np.float32, np.float64):
+        return x
     return x.detach().cpu().numpy()
 
 

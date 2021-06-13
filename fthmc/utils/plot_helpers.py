@@ -1,4 +1,5 @@
 from __future__ import absolute_import, division, print_function, annotations
+from fthmc.utils.logger import in_notebook
 import torch
 import os
 from typing import Union
@@ -54,21 +55,27 @@ def savefig(fig: plt.Figure, outfile: str, dpi: int = 500):
     fig.savefig(outfile, dpi=dpi, bbox_inches='tight')
 
 
-def save_live_plots(plots: dict, outdir: PathLike):
+def save_live_plots(plots: dict[str, dict], outdir: PathLike):
     if isinstance(outdir, Path):
         outdir = str(outdir)
 
     io.check_else_make_dir(outdir)
+    for key, plot in plots.items():
+        outfile = os.path.join(outdir, f'{key}_live.pdf')
+        try:
+            savefig(plot['fig'], outfile)
+        except KeyError:
+            continue
 
-    dqf = os.path.join(outdir, 'dq_training.pdf')
-    savefig(plots['dq']['fig'], dqf)
-
-    dklf = os.path.join(outdir, 'loss_dkl_ess_training.pdf')
-    savefig(plots['dkl']['fig'], dklf)
-
-    if 'force' in plots and 'fig' in plots['force']:
-        ff = os.path.join(outdir, 'loss_force_training.pdf')
-        savefig(plots['force']['fig'], ff)
+    #  dqf = os.path.join(outdir, 'dq_training.pdf')
+    #  savefig(plots['dq']['fig'], dqf)
+    #
+    #  dklf = os.path.join(outdir, 'loss_dkl_ess_training.pdf')
+    #  savefig(plots['dkl']['fig'], dklf)
+    #
+    #  if 'force' in plots and 'fig' in plots['force']:
+    #      ff = os.path.join(outdir, 'loss_force_training.pdf')
+    #      savefig(plots['force']['fig'], ff)
 
 
 def plot_metric(
@@ -141,6 +148,7 @@ def plot_history(
         history: dict[str, np.ndarray],
         param: Param,
         therm_frac: float = 0.0,
+        config: TrainConfig = None,
         xlabel: str = None,
         title: str = None,
         num_chains: int = 10,
@@ -159,7 +167,8 @@ def plot_history(
             outfile = os.path.join(outdir, f'{key}.pdf')
 
         if title is None:
-            title = param.uniquestr()
+            tarr = get_title(param, config)
+            title = '\n'.join(tarr) if len(tarr) > 0 else None
 
         _ = plot_metric(val,
                         ylabel=key,
@@ -172,42 +181,46 @@ def plot_history(
 
 
 def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
-    plots_dq = {}
+    plots_dqsq = {}
     plots_dkl = {}
     plots_force = {}
-    if io.in_notebook():
-        plots_dq = init_live_plot(dpi=500, figsize=figsize, param=param,
-                                  ylabel='dq', xlabel='Epoch')
+    if in_notebook:
+        plots_dqsq = init_live_plot(figsize=figsize,
+                                    param=param, config=config,
+                                    ylabel='dqsq', xlabel='Epoch')
 
         ylabel_dkl = ['loss_dkl', 'ESS']
         plots_dkl = init_live_joint_plots(config.n_era, config.n_epoch,
-                                          dpi=500, figsize=figsize, param=param,
+                                          figsize=figsize, param=param,
+                                          config=config,
                                           ylabel=ylabel_dkl)
 
         if config.with_force:
             ylabel_force = ['loss_force', 'ESS']
             plots_force = init_live_joint_plots(config.n_era,
-                                                config.n_epoch, dpi=500,
+                                                config.n_epoch,
                                                 figsize=figsize,
                                                 param=param,
+                                                config=config,
                                                 ylabel=ylabel_force)
 
     return {
-        'dq': plots_dq,
+        'dqsq': plots_dqsq,
         'dkl': plots_dkl,
         'force': plots_force,
     }
 
 
 def init_live_joint_plots(
-    n_era: int,
-    n_epoch: int,
-    dpi: int = 400,
-    figsize: tuple = (8, 4),
-    param: Param = None,
-    xlabel: str = None,
-    ylabel: list[str] = None,
-    colors: list[str] = None,
+        n_era: int,
+        n_epoch: int,
+        dpi: int = 400,
+        figsize: tuple = (5, 2),
+        param: Param = None,
+        config: TrainConfig = None,
+        xlabel: str = None,
+        ylabel: list[str] = None,
+        colors: list[str] = None,
 ):
     if colors is None:
         colors = ['#0096ff', '#f92672']
@@ -229,14 +242,23 @@ def init_live_joint_plots(
     ax0.tick_params(axis='y', labelcolor=colors[0])
     ax0.grid(False)
 
-    line1 = ax1.plot([0], [0], alpha=0.5, c=colors[1])  # dummy
+    line1 = ax1.plot([0], [0], alpha=0.8, c=colors[1])  # dummy
 
     ax0.tick_params(axis='y', labelcolor=colors[0])
     ax1.tick_params(axis='y', labelcolor=colors[1])
     ax1.grid(False)
     ax0.set_xlabel('Epoch' if xlabel is None else xlabel)
-    if param is not None:
-        fig.suptitle(param.uniquestr())
+
+    title = get_title(param, config)
+    if len(title) > 0:
+        fig.suptitle('\n'.join(title))
+    #  title = ''
+    #  if param is not None:
+    #      title += param.uniquestr()
+    #  if config is not None:
+    #      title += config.uniquestr()
+
+    #  fig.suptitle(title)
 
     display_id = display(fig, display_id=True)
     plot_obj1 = PlotObject(ax0, line0)
@@ -251,12 +273,23 @@ def init_live_joint_plots(
     }
 
 
+def get_title(param: Param = None, config: TrainConfig = None):
+    title = []
+    if param is not None:
+        title.append(param.uniquestr())
+    if config is not None:
+        title.append(config.uniquestr())
+
+    return title
+
+
 def init_live_plot(
-        dpi=125,
-        figsize=(8, 4),
-        param=None,
-        xlabel=None,
-        ylabel=None,
+        dpi: int = 400,
+        figsize: tuple[int] = (5, 2),
+        param: Param = None,
+        config: TrainConfig = None,
+        xlabel: str = None,
+        ylabel: str = None,
         **kwargs
 ):
     color = kwargs.pop('color', '#0096FF')
@@ -264,8 +297,11 @@ def init_live_plot(
     #  sns.set_style('ticks')
     fig, ax = plt.subplots(dpi=dpi, figsize=figsize, constrained_layout=True)
     line = ax.plot([0], [0], c=color, **kwargs)
-    if param is not None:
-        _ = fig.suptitle(param.uniquestr())
+
+    title = get_title(param, config)
+
+    if len(title) > 0:
+        _ = fig.suptitle('\n'.join(title))
 
     if ylabel is not None:
         _ = ax.set_ylabel(ylabel, color=color)
@@ -282,8 +318,10 @@ def init_live_plot(
 
 def moving_average(x: np.ndarray, window: int = 10):
     #  if len(x) < window:
-    if x.shape[0] < window:
+    if len(x.shape) > 0 and x.shape[0] < window:
         return np.mean(x, keepdims=True)
+    #  if x.shape[0] < window:
+    #      return np.mean(x, keepdims=True)
 
     return np.convolve(x, np.ones(window), 'valid') / window
 

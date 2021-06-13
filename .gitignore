@@ -5,3 +5,5 @@
 *logs*
 *Untitled.ipynb*
 .vim
+.vscode/
+*.out

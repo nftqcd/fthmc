@@ -14,7 +14,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import utils.io as io
+#  import utils.io as io
+from utils.logger import Logger, get_timestamp
 
 __author__ = 'Sam Foreman'
 __date__ = '05/23/2021'
@@ -30,10 +31,10 @@ RED = '#ff4050'
 
 
 
-NOW = io.get_timestamp('%Y-%m-%d-%H%M%S')
+NOW = get_timestamp('%Y-%m-%d-%H%M%S')
 METRIC_NAMES = ['dt', 'accept', 'traj', 'dH', 'expdH', 'plaq', 'charge']
 
-logger = io.Logger()
+logger = Logger()
 TWO_PI = 2 * PI
 
 
@@ -91,6 +92,36 @@ class TrainConfig:
     plot_freq: int = 20
     with_force: bool = False
 
+    def uniquestr(self):
+        hstr = ''.join([f'{i}' for i in self.hidden_sizes])
+        pstrs = [
+            f'nb{self.batch_size}',
+            f'nl{self.n_layers}',
+            f'ns{self.n_s_nets}',
+            f'ks{self.kernel_size}',
+            f'hl{hstr}',
+            f'lr{self.base_lr}',
+            f'era{self.n_era}',
+            f'epoch{self.n_epoch}',
+        ]
+        if self.with_force:
+            pstrs += '_force'
+
+        ustr = '_'.join(pstrs)
+
+        return ustr
+
+    def __repr__(self):
+        status = {k: v for k, v in self.__dict__.items()}
+        s = '\n'.join('='.join((str(k), str(v))) for k, v in status.items())
+        return '\n'.join(['TrainConfig:', 16 * '-', s])
+
+    def to_json(self):
+        attrs = {k: v for k, v in self.__dict__.items()}
+        return attrs
+
+    def summary(self):
+        return self.__repr__
 
 
 

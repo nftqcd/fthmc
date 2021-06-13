@@ -36,11 +36,6 @@ class Param:
         self.dt = self.tau / self.nstep
 
     def initializer(self):
-        #  if self.randinit:
-        #      rand = np.random.uniform(-PI, PI, size=self.shape)
-        #      return torch.from_numpy(rand)
-        #
-        #  return torch.zeros(self.shape)
         if self.randinit:
             return torch.empty([self.nd,] + self.lat).uniform_(-PI, PI)
         else:
@@ -60,10 +55,19 @@ class Param:
 
     def uniquestr(self, ext=None):
         lat = "x".join(str(x) for x in self.lat)
-        ustr = (
-            f'out_t{lat}_b{self.beta}_n{self.ntraj}'
-            f'_t{self.tau}_s{self.nstep}'
-        )
+        pstr = [
+            f't{lat}',
+            f'b{self.beta}',
+            f'n{self.ntraj}',
+            f't{self.tau}',
+            f's{self.nstep}',
+        ]
+        ustr = '_'.join(pstr)
+
+        #  ustr = (
+        #      f't{lat}_b{self.beta}_n{self.ntraj}'
+        #      f'_t{self.tau}_s{self.nstep}'
+        #  )
         if ext is not None:
             ustr = f'{ustr}.ext'
 
