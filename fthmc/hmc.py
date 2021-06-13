@@ -41,35 +41,58 @@ def run_hmc(
     check_else_make_dir(plots_dir)
 
     fields_arr = []
-    metrics = {k: [] for k in METRIC_NAMES}
+    #  metrics = {k: [] for k in METRIC_NAMES}
     logger.log(repr(param))
     observables = get_observables(param, x)
     logger.print_metrics(observables._metrics)
     action = qed.BatchAction(param.beta)
+    q = qed.batch_charges(x[None, :])
     history = {}
     for n in range(param.nrun):
         t0 = time.time()
         fields = []
-        metrics = {}
+        metrics = {
+            'dt': [0], 'traj': [0], 'accept': [True], 'dH': [0.],
+            'expdH': [0.], 'q': [q], 'dqsq': [0], 'logp': [0.], 'plaq': [0.]
+        }
         for i in range(param.ntraj):
             t1 = time.time()
-            xb = x[None, :]
-            q0 = qed.batch_charges(xb)
-
+            #  q0 = qed.batch_charges(x[None, :])
+            #  x0 = x.clone()[None, :]
             dH, expdH, acc, x = qed.hmc(param, x, verbose=False)
+            qnew = qed.batch_charges(x[None, :])
+            qold = metrics['q'][-1]
 
-            q1 = qed.batch_charges(x[None, :])
-            dqsq = (q1 - q0) ** 2,
 
-            logp = (-1.) * action(xb)
+            dqsq = (int(qnew) - int(qold)) ** 2
+            #  x1 = x.clone()[None, :]
+
+            #  if i > 1:
+            #      q0 = metrics['q1'][-1]
+            #  else:
+            #      q0 = qed.batch_charges(x[None, :])
+            #
+            #  q1 = qed.batch_charges(x[None, :])
+            #  q1 = qed.batch_charges(x1)
+            #  q0 = qed.batch_charges(x0)
+            #  dqsq = (int(q1) - int(q0)) ** 2
+            #  q1 = qed.batch_charges(x[None, :])
+
+            #  dqsq = (q1 - q0) ** 2,
+
+            logp = (-1.) * action(x[None, :])
             metrics_ = {
                 'dt': time.time() - t1,
                 'traj': n * param.ntraj + i + 1,
                 'accept': 'True' if acc else 'False',
                 'dH': dH,
                 'expdH': expdH,
+                'q': int(qnew),
+                #  'q0': int(q0),
+                #  'q1': int(q1),
                 'dqsq': dqsq,
-                'q': int(q1),
+                #  'q0': int(q0),
+                #  'q1': int(q1),
                 'logp': logp,
                 'plaq': logp / (param.beta * param.volume),
                 #  'action': observables.action,

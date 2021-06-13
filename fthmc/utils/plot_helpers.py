@@ -101,15 +101,25 @@ def plot_metric(
     if figsize is None:
         figsize = (4, 3)
 
-    if isinstance(metric, torch.Tensor):
-        metric = metric.cpu().numpy()
+    if isinstance(metric, list):
+        if isinstance(metric[0], tuple) and len(metric[0]) == 1:
+            metric = [m[0] for m in metric]
 
-    elif isinstance(metric, list):
-        if len(metric) == 1:
-            metric = np.array([grab(metric[0])])
-        else:
-            if isinstance(metric[0], torch.Tensor):
-                metric = list_to_arr(metric)
+    if isinstance(metric, list) and isinstance(metric[0], torch.Tensor):
+        metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
+
+    if isinstance(metric, torch.Tensor):
+        metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
+
+    #  if isinstance(metric, torch.Tensor):
+    #      metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
+
+    #  elif isinstance(metric, list):
+    #      if len(metric) == 1:
+    #          metric = np.array([grab(metric[0])])
+    #      else:
+    #          if isinstance(metric[0], torch.Tensor):
+    #              metric = list_to_arr(metric)
 
     metric = np.array(metric)
     if thin > 0:
