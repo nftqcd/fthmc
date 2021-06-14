@@ -127,7 +127,7 @@ def plot_metric(
 
     if isinstance(metric, list):
         if isinstance(metric[0], tuple) and len(metric[0]) == 1:
-            metric = [m[0] for m in metric]
+            metric = [grab(m[0]) for m in metric]
 
     if isinstance(metric, list) and isinstance(metric[0], torch.Tensor):
         metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()

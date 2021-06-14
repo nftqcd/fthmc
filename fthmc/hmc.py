@@ -75,12 +75,12 @@ def run_hmc(
         #  plaq = -action(x[None, :]) / (param.beta * param.volume)
         xarr = []
         history = {
-            'dt': [0.],
+            'dt': [torch.tensor(0.)],
             'traj': [0],
-            'acc': [1.],
-            'dH': [0.],
+            'acc': [torch.tensor(1.)],
+            'dH': [torch.tensor(0.)],
             'q': [q],
-            'dqsq': [0],
+            'dqsq': [torch.tensor(0)],
             'plaq': [p],
         }
         for i in range(param.ntraj):
@@ -100,11 +100,11 @@ def run_hmc(
             metrics = {
                 'traj': n * param.ntraj + i + 1,
                 'dt': time.time() - t1,
-                'accept': 'True' if acc else 'False',
+                'acc': acc,  # 'True' if acc else 'False',
                 'dH': dH,
                 'q': int(qnew),
                 'dqsq': dqsq,
-                'plaq': p,
+                'plaq': plaq,
             }
             for k, v in metrics.items():
                 try:

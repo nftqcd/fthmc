@@ -35,10 +35,10 @@ def get_timestamp(fstr: str = None):
     return now.strftime(fstr)
 
 
-TensorList = list[torch.Tensor]
-TensorTuple = tuple[torch.Tensor]
-TensorArrayLike = Union[TensorList, TensorTuple, torch.Tensor]
-Scalar = Union[int, bool, float]
+TensorList = "list[torch.Tensor]"
+TensorTuple = "tuple[torch.Tensor]"
+TensorArrayLike = "Union[TensorList, TensorTuple, torch.Tensor]"
+Scalar = "Union[int, bool, float]"
 
 def strformat(
     k: str,
