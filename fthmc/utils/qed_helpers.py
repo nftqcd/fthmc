@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 
 from typing import List
-from fthmc.utils.param import Param
+from fthmc.config import Param
 
 TWO_PI = 2 * PI
 
@@ -224,6 +224,22 @@ def ft_force(
     return ff
 
 
+
+def plaq_phase(f, mu=0, nu=1):
+    f = torch.squeeze(f)
+    if len(f.shape) == 4:
+        return (f[:, mu]
+                + torch.roll(f[:, nu], -1, mu + 1)
+                - torch.roll(f[:, mu], -1, nu + 1)
+                - f[:, nu])
+
+    return (f[0, :]
+            + torch.roll(f[1, :], -1, 0)
+            - torch.roll(f[0, :], -1, 1)
+            - f[1, :])
+
+
+
 def action(param, f):
     return (-param.beta)*torch.sum(torch.cos(plaq_phase(f)))
 
@@ -238,8 +254,6 @@ def force(param, f):
     return ff
 
 
-
-
 def leapfrog(param, x, p, verbose=True):
     dt = param.dt
     x_ = x + 0.5 * dt * p
@@ -250,7 +264,7 @@ def leapfrog(param, x, p, verbose=True):
         force_norm = torch.linalg.norm(f)
         print(f'plaq(x): {plaq}, force_norm: {force_norm}')
 
-    for i in range(param.nstep - 1):
+    for _ in range(param.nstep - 1):
         x_ = x_ + dt * p_
         p_ = p_ + (-dt) * force(param, x_)
 

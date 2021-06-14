@@ -2,16 +2,22 @@
 samplers.py
 """
 from __future__ import absolute_import, division, print_function, annotations
+from typing import Callable
 
 import torch
 import numpy as np
 from fthmc.utils.distributions import calc_dkl, calc_ess
 import fthmc.utils.qed_helpers as qed
 
+import torch.nn as nn
+import fthmc.utils.io as io
+from fthmc.utils.distributions import bootstrap
 
-def grab(x: torch.Tensor):
+
+def grab(x: torch.Tensor) -> np.ndarray:
     if isinstance(x, (np.ndarray, np.float32, np.float64)):
         return x
+
     return x.detach().cpu().numpy()
 
 
@@ -32,10 +38,7 @@ def apply_flow_to_prior(prior, coupling_layers, *, batch_size, xi=None):
     return xi, x, logq
 
 
-import torch.nn as nn
-from fthmc.config import ActionFn
-import fthmc.utils.io as io
-from fthmc.utils.distributions import bootstrap
+ActionFn = Callable[[float], torch.Tensor]
 
 def generate_ensemble(
         model: nn.Module,
@@ -84,11 +87,11 @@ def serial_sample_generator(model, action_fn, batch_size, num_samples):
 
 
 def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
-    names = ['x', 'ess', 'q', 'dqsq',
-             'dkl', 'logq', 'logp', 'accepted']
+    names = ['ess', 'q', 'dqsq', 'dkl', 'logq', 'logp', 'accepted']
     history = {
         name: [] for name in names
     }
+    xarr = []
 
     # Build Markov chain
     sample_gen = serial_sample_generator(model, action_fn, batch_size,
@@ -112,36 +115,68 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
                     accepted = True
                 else:
                     accepted = False
-                    x_new = history['x'][-1]
+                    x_new = xarr[-1]
                     q_new = q_old
                     logp_new = logp_old
                     logq_new = logq_old
 
             # Update Markov Chain
-            history['q'].append(q_new)
-            history['dqsq'].append((q_new - q_old) ** 2)
-            history['dkl'].append(calc_dkl(logp_new, logq_new))
-            history['ess'].append(calc_ess(logp_new, logq_new))
+            xarr.append(x_new)
+            metrics = {
+                'q': q_new,
+                'dqsq': (q_new - q_old) ** 2,
+                'dkl': calc_dkl(logp_new, logq_new),
+                'ess': calc_ess(logp_new, logq_new),
+                'logp': logp_new,
+                'logq': logq_new,
+                #  'x': x_new,
+                'accepted': accepted,
+            }
 
-            history['logp'].append(logp_new)
-            history['logq'].append(logq_new)
-            history['x'].append(x_new)
-            history['accepted'].append(accepted)
+            for key, val in metrics.items():
+                try:
+                    history[key].append(val)
+                except KeyError:
+                    history[key] = [val]
+            #
+            #
+            #  history['q'].append(grab(q_new))
+            #  history['dqsq'].append((q_new - q_old) ** 2)
+            #  history['dkl'].append(calc_dkl(logp_new, logq_new))
+            #  history['ess'].append(calc_ess(logp_new, logq_new))
+            #
+            #  history['logp'].append(logp_new)
+            #  history['logq'].append(logq_new)
+            #  history['x'].append(x_new)
+            #  history['accepted'].append(accepted)
 
-    history_ = {}
-    for key, val in history.items():
-        #  history_[key] = np.array(np.stack([
-        #      grab(x) if isinstance(x, torch.Tensor) else x
-        #      for x in val
-        #  ]))
-        try:
-            arr = np.array(val)
-        except TypeError:
-            arr = np.array(np.stack([
-                grab(x) if isinstance(x, torch.Tensor) else x
-                for x in val
-            ]))
+    history_ = {
+        k: torch.Tensor(v).numpy() for k, v in history.items()
+    }
+    #  history = {
+    #      k: np.array([
+    #          grab(torch.stack(z)) if isinstance(z, torch.Tensor)
+    #          else grab(np.stack(z)) for z in v
+    #      ]) for k, v in history.items()
+    #  }
+    #          grab(z) if isinstance(z, torch.Tensor) else z for z in v
+    #      ])) for k, v in history.items()
+    #  }
+    #  history_ = {k: torch.Tensor(v).numpy() for k, v in history.items()}
+    #  for key, val in history.items():
+    #      history_[key] = np.array(val)
+    #      #  history_[key] = np.array(np.stack([
+    #      #      grab(x) if isinstance(x, torch.Tensor) else x
+    #      #      for x in val
+    #      #  ]))
+    #      try:
+    #          arr = np.array(val)
+    #      except TypeError:
+    #          arr = np.array(np.stack([
+    #              grab(x) if isinstance(x, torch.Tensor) else x
+    #              for x in val
+    #          ]))
+    #
+    #      history_[key] = arr
 
-        history_[key] = arr
-
-    return history
+    return history_

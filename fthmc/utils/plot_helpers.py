@@ -1,29 +1,50 @@
-from __future__ import absolute_import, division, print_function, annotations
-from fthmc.utils.logger import in_notebook
-import torch
+from __future__ import absolute_import, annotations, division, print_function
+
 import os
-from typing import Union
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
-from pathlib import Path
+import torch
+from IPython.display import DisplayHandle, display
 
-from fthmc.utils.param import Param
 import fthmc.utils.io as io
+from fthmc.config import Param, TrainConfig
+from fthmc.utils.logger import in_notebook
 
-from fthmc.config import PlotObject, LivePlotData, TrainConfig
+MPL_BACKEND = os.environ.get('MPLBACKEND', None)
+EXT = ('png' if MPL_BACKEND == 'module://itermplot' else 'pdf')
 
-from IPython.display import display, DisplayHandle
 
 logger = io.Logger()
+
 
 PathLike = Union[str, Path]
 Metric = Union[list, np.ndarray, torch.Tensor]
 
 
+@dataclass
+class PlotObject:
+    #  fig: plt.Figure
+    ax: plt.Axes
+    line: list[plt.Line2D]
+
+
+@dataclass
+class LivePlotData:
+    data: Any
+    plot_obj: PlotObject
+
+
+def torch_delete(x: torch.Tensor, indices: torch.Tensor):
+    mask = torch.ones(x.numel(), dtype=torch.bool)
+    mask[indices] = False
+    return x[mask]
+
 def therm_arr(
-        x: np.ndarray,
+        x: Union[list, np.ndarray, torch.Tensor],
         therm_frac: float = 0.1,
         ret_steps: bool = True
 ):
@@ -31,7 +52,10 @@ def therm_arr(
     taxis = 0
     num_steps = x.shape[taxis]
     therm_steps = int(therm_frac * num_steps)
-    x = np.delete(x, np.s_[:therm_steps], axis=taxis)
+    x = x[therm_steps:]
+    #  if isinstance(x, torch.Tensor):
+    #      x = torch_delete(x, torch.arange(therm_steps)
+    #  x = np.delete(x, np.s_[:therm_steps], axis=taxis)
     t = np.arange(therm_steps, num_steps)
     if ret_steps:
         return x, t
@@ -52,12 +76,20 @@ def list_to_arr(x: list):
         ])
 
 
-def savefig(fig: plt.Figure, outfile: str, dpi: int = 500):
+def savefig(
+        fig: plt.Figure,
+        outfile: str,
+        dpi: int = 500,
+        verbose: bool = True
+):
     io.check_else_make_dir(os.path.dirname(outfile))
     outfile = io.rename_with_timestamp(outfile, fstr='%H%M%S')
-    logger.log(f'Saving figure to: {outfile}')
+    if verbose:
+        logger.log(f'Saving figure to: {outfile}')
     #  fig.clf()
     #  plt.close('all')
+    if MPL_BACKEND == 'module://itermplot':
+        plt.show()
     fig.savefig(outfile, dpi=dpi, bbox_inches='tight')
 
 
@@ -66,22 +98,13 @@ def save_live_plots(plots: dict[str, dict], outdir: PathLike):
         outdir = str(outdir)
 
     io.check_else_make_dir(outdir)
+    logger.log(f'Saving live plots to: {outdir}')
     for key, plot in plots.items():
-        outfile = os.path.join(outdir, f'{key}_live.pdf')
+        outfile = os.path.join(outdir, f'{key}_live.{EXT}')
         try:
-            savefig(plot['fig'], outfile)
+            savefig(plot['fig'], outfile, verbose=False)
         except KeyError:
             continue
-
-    #  dqf = os.path.join(outdir, 'dq_training.pdf')
-    #  savefig(plots['dq']['fig'], dqf)
-    #
-    #  dklf = os.path.join(outdir, 'loss_dkl_ess_training.pdf')
-    #  savefig(plots['dkl']['fig'], dklf)
-    #
-    #  if 'force' in plots and 'fig' in plots['force']:
-    #      ff = os.path.join(outdir, 'loss_force_training.pdf')
-    #      savefig(plots['force']['fig'], ff)
 
 
 def plot_metric(
@@ -94,7 +117,8 @@ def plot_metric(
         num_chains: int = 10,
         therm_frac: float = 0.,
         outfile: PathLike = None,
-        figsize: tuple[int] = None,
+        figsize: tuple = None,
+        verbose: bool = False,
         **kwargs,
 ):
     """Plot metric object."""
@@ -110,16 +134,6 @@ def plot_metric(
 
     if isinstance(metric, torch.Tensor):
         metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
-
-    #  if isinstance(metric, torch.Tensor):
-    #      metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
-
-    #  elif isinstance(metric, list):
-    #      if len(metric) == 1:
-    #          metric = np.array([grab(metric[0])])
-    #      else:
-    #          if isinstance(metric[0], torch.Tensor):
-    #              metric = list_to_arr(metric)
 
     metric = np.array(metric)
     if thin > 0:
@@ -154,10 +168,9 @@ def plot_metric(
         ax.set_title(title)
 
     if outfile is not None:
-        savefig(fig, outfile)
+        savefig(fig, outfile, verbose=verbose)
 
     return fig, ax
-
 
 
 def plot_history(
@@ -171,7 +184,8 @@ def plot_history(
         outdir: str = None,
         skip: list[str] = None,
         thin: int = 0,
-        hline: bool = False,
+        #  hline: bool = False,
+        verbose: bool = False,
         **kwargs,
 ):
     for key, val in history.items():
@@ -180,7 +194,7 @@ def plot_history(
 
         outfile = None
         if outdir is not None:
-            outfile = os.path.join(outdir, f'{key}.pdf')
+            outfile = os.path.join(outdir, f'{key}.{EXT}')
 
         if title is None:
             tarr = get_title(param, config)
@@ -193,7 +207,10 @@ def plot_history(
                         outfile=outfile,
                         thin=thin,
                         therm_frac=therm_frac,
-                        num_chains=num_chains, **kwargs)
+                        num_chains=num_chains,
+                        verbose=verbose,
+                        **kwargs)
+    plt.close('all')
 
 
 def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
@@ -245,7 +262,7 @@ def init_live_joint_plots(
     fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
                             constrained_layout=True)
     plt.xlim(0, n_era * n_epoch)
-    line0 = ax0.plot([0], [0], alpha=0.5, c=colors[0])
+    line0 = ax0.plot([0], [0], alpha=0.9, c=colors[0])
     ax1 = ax0.twinx()
     if ylabel is None:
         ax0.set_ylabel('Loss', color=colors[0])
@@ -258,7 +275,7 @@ def init_live_joint_plots(
     ax0.tick_params(axis='y', labelcolor=colors[0])
     ax0.grid(False)
 
-    line1 = ax1.plot([0], [0], alpha=0.8, c=colors[1])  # dummy
+    line1 = ax1.plot([0], [0], alpha=0.9, c=colors[1])  # dummy
 
     ax0.tick_params(axis='y', labelcolor=colors[0])
     ax1.tick_params(axis='y', labelcolor=colors[1])

@@ -4,14 +4,14 @@ io.py
 Contains helper functions for file IO.
 """
 from __future__ import absolute_import, annotations, division, print_function
-from dataclasses import asdict, dataclass
+
 import datetime
-from fthmc.config import LOGS_DIR, TrainConfig
-from functools import wraps
 import os
-from pathlib import Path
 import shutil
-from typing import Dict, Union
+from dataclasses import asdict, dataclass
+from functools import wraps
+from pathlib import Path
+from typing import Any, Dict, Union
 
 import joblib
 import numpy as np
@@ -19,10 +19,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from fthmc.utils.param import Param
+from fthmc.config import LOGS_DIR, Param, TrainConfig
 from fthmc.utils.logger import (Logger, check_else_make_dir, get_timestamp,
-                                strformat, savez)
-
+                                savez, strformat)
 
 logger = Logger()
 WIDTH, HEIGHT = shutil.get_terminal_size(fallback=(156, 50))
@@ -69,8 +68,9 @@ def rename_with_timestamp(
 
     return outfile
 
+
 def save_history(
-        history: dict[str, np.ndarray],
+        history: dict[str, Any],
         outfile: str,
         name: str = None
 ):

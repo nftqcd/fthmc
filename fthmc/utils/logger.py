@@ -4,7 +4,7 @@ logger.py
 from __future__ import absolute_import, division, print_function, annotations
 import os
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 import torch
 import numpy as np
 
@@ -16,7 +16,10 @@ def in_notebook():
     """Simple checker function to see if we're currently in a notebook."""
     try:
         from IPython import get_ipython
-        if 'IPKernelApp' not in get_ipython().config:
+        try:
+            if 'IPKernelApp' not in get_ipython().config:
+                return False
+        except AttributeError:
             return False
     except ImportError:
         return False
@@ -32,12 +35,23 @@ def get_timestamp(fstr: str = None):
     return now.strftime(fstr)
 
 
-def strformat(k, v, window: int = 0):
+TensorList = list[torch.Tensor]
+TensorTuple = tuple[torch.Tensor]
+TensorArrayLike = Union[TensorList, TensorTuple, torch.Tensor]
+Scalar = Union[int, bool, float]
+
+def strformat(
+    k: str,
+    v: Union[Scalar, TensorArrayLike],
+    window: int = 0
+):
     if isinstance(v, tuple) and len(v) == 1:
         v = v[0]
 
-    if isinstance(v, torch.Tensor):
-        v = v.detach().cpu().numpy()
+    if torch.is_tensor(v):
+        v = v.detach().cpu().numpy()  # torch.Tensor
+    #  if isinstance(v, torch.Tensor):
+    #      v = v.detach().cpu().numpy()
     #  if isinstance(v, torch.Tensor):
     #      v = v.detach().numpy()
 
@@ -52,24 +66,25 @@ def strformat(k, v, window: int = 0):
     if isinstance(v, bool):
         return f'{str(k)}=True' if v else f'{str(k)}=False'
 
+    if isinstance(v, float):
+        return f'{str(k)}={v:<4.3f}'
+
     if isinstance(v, (list, np.ndarray)):
         v = np.array(v)
         if window > 0 and len(v.shape) > 0:
             window = min((v.shape[0], window))
-            avgd = np.mean(v[-window:])
+            avgd = v[-window:].mean()
+            #  avgd = np.mean(v[-window:])
         else:
-            avgd = np.mean(v)
+            avgd = v.mean()
+            #  avgd = np.mean(v)
 
         return f'{str(k)}={avgd:<4.3f}'
 
-    if isinstance(v, float):
-        return f'{str(k)}={v:<4.3f}'
     try:
         return f'{str(k)}={v:<3g}'
     except ValueError:
         return f'{str(k)}={v:<3}'
-
-
 
 
 # noqa: E999
@@ -176,31 +191,29 @@ class Logger:
 
         check_else_make_dir(outdir)
         outfile = os.path.join(os.getcwd(), tstamp, 'metrics.z')
-        self.log(f'Saving metrics to: {outfile}')
+        self.log(f'Saving metrics to: {os.path.relpath(outdir)}')
         savez(metrics, outfile, name=fname.split('.')[0])
 
 
 def check_else_make_dir(outdir: Union[str, Path, list, tuple]):
     if isinstance(outdir, (str, Path)) and not os.path.isdir(str(outdir)):
-        Logger().log(f'Creating directory: {outdir}')
+        Logger().log(f'Creating directory: {os.path.relpath(outdir)}')
         os.makedirs(str(outdir))
-
-    elif isinstance(outdir, (tuple, list)):
-        _ = [check_else_make_dir(str(d)) for d in outdir]
 
     #  if not os.path.isdir(outdir):
     #      Logger().log(f'Creating directory: {outdir}')
     #      os.makedirs(outdir)
+    elif isinstance(outdir, (tuple, list)):
+        _ = [check_else_make_dir(str(d)) for d in outdir]
+
 
 
 def loadz(infile: str):
     return joblib.load(infile)
 
 
-def savez(obj: dict, fpath: str, name: str = None, logger=None):
+def savez(obj: Any, fpath: str, name: str = None):
     """Save `obj` to compressed `.z` file at `fpath`."""
-    if logger is None:
-        logger = Logger()
     head, _ = os.path.split(fpath)
 
     check_else_make_dir(head)
@@ -209,9 +222,9 @@ def savez(obj: dict, fpath: str, name: str = None, logger=None):
         fpath += '.z'
 
     if name is not None:
-        logger.log(f'Saving {name} to {os.path.abspath(fpath)}.')
+        Logger().log(f'Saving {name} to {os.path.relpath(fpath)}.')
     else:
-        logger.log(f'Saving {obj.__class__} to {os.path.abspath(fpath)}.')
+        Logger().log(f'Saving {obj.__class__} to {os.path.relpath(fpath)}.')
 
     joblib.dump(obj, fpath)
 
