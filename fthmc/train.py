@@ -4,53 +4,61 @@ train.py
 End-to-end training example.
 """
 from __future__ import absolute_import, annotations, division, print_function
-from dataclasses import asdict
-import os
-from pathlib import Path
 
+import os
 import time
-#  from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from math import pi as PI
-from typing import Union
-#  from typing import Callable
+from pathlib import Path
+from typing import Callable, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 
-#  from typing import List
 import fthmc.utils.io as io
-from fthmc.config import LivePlotData
+import fthmc.utils.logger as logging
+import fthmc.utils.plot_helpers as plotter
 import fthmc.utils.qed_helpers as qed
-from fthmc.utils.distributions import (
-    MultivariateUniform, bootstrap, calc_dkl, calc_ess
-)
-from fthmc.utils.layers import get_nets, make_net_from_layers, make_u1_equiv_layers, set_weights
-from fthmc.utils.param import Param
-from fthmc.utils.plot_helpers import (
-    plot_history, save_live_plots, update_joint_plots, init_plots, update_plot,
-)
-from fthmc.utils.samplers import apply_flow_to_prior, make_mcmc_ensemble
-from fthmc.config import qedMetrics, State, ActionFn, TrainConfig, ftMetrics
-from fthmc.utils.logger import Logger, check_else_make_dir, in_notebook, get_timestamp
-
-
-#  LossFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-NOW = get_timestamp('%Y-%m-%d-%H%M%S')
-METRIC_NAMES = ['dt', 'accept', 'traj', 'dH', 'expdH', 'plaq', 'charge']
+from fthmc.config import Param, TrainConfig
+from fthmc.utils.distributions import MultivariateUniform, calc_dkl, calc_ess
+from fthmc.utils.layers import (get_nets, make_net_from_layers,
+                                make_u1_equiv_layers, set_weights)
+from fthmc.utils.samplers import apply_flow_to_prior
 
 #  logger = io.Logger()
-logger = Logger()
+logger = logging.Logger()
 TWO_PI = 2 * PI
+
+
+@dataclass
+class State:
+    x: torch.Tensor
+    p: torch.Tensor
+
+
+@dataclass
+class qedMetrics:
+    param: Param
+    plaq: torch.Tensor
+    charge: torch.Tensor
+
+    def __post_init__(self):
+        self._metrics = {
+            'plaq': self.plaq,
+            'charge': self.charge
+        }
+
 
 def grab(x: torch.Tensor):
     return x.detach().cpu().numpy()
 
+
 def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
+
 
 def list_to_tensor(x: list):
     return torch.tensor([grab(torch.stack(i)) for i in x])
@@ -70,35 +78,10 @@ def get_observables(param: Param, x: torch.Tensor):
         action = plaqsum / param.volume
 
         action = (-param.beta) * plaqsum / (-param.beta * param.volume)
-        #  action = torch.sum(torch.cos(plaq)) / param.volume
-        #  action = qed.action(param, x) / (-param.beta * param.volume)
         charge = qed.topo_charge(x[None, :]).to(torch.int)
 
-    return qedMetrics(param=param, action=action, plaq=plaq, charge=charge)
+    return qedMetrics(param=param, plaq=plaq, charge=charge)
 
-
-def get_ft_metrics(
-        param: Param,
-        state0: State,
-        state1: State,
-        force: torch.Tensor,
-        flow: list
-):
-    force_norm = torch.linalg.norm(force)
-    ft_action = qed.ft_action(param, flow, state1.x)
-    p0 = state0.p
-    p1 = state1.p
-    p0_norm = torch.sum(p0 * p0)
-    p1_norm = torch.sum(p1 * p1)
-    p_norm = torch.sum(p0 * p1) / torch.sqrt(p0_norm * p1_norm)
-    #  ft_metrics = ftMetrics(force_norm, ft_action, p_norm)
-
-    #  return ft_metrics
-    return {
-        'force_norm': force_norm,
-        'ft_action': ft_action,
-        'p_norm': p_norm,
-    }
 
 
 def update_history(
@@ -125,129 +108,7 @@ def update_history(
     return history
 
 
-def update_ft_metrics(metrics, metrics_):
-    for key, val in metrics_.items():
-        try:
-            metrics[key].append(val.detach().cpu().numpy())
-        except KeyError:
-            metrics[key] = [val.detach().cpu().numpy()]
-
-    return metrics
-
-
-def ft_leapfrog(param: Param, flow: list, x: torch.Tensor, p: torch.Tensor):
-    metrics = {'force_norm': [], 'ft_action': [], 'p_norm': []}
-
-    dt = param.dt
-    x = torch.squeeze(x)
-    state = State(x, p)
-
-    x = x + 0.5 * dt * p
-    force = qed.ft_force(param, flow, x)
-    p = p + (-dt) * force
-
-    state1 = State(x, p)
-
-    metrics_ = get_ft_metrics(param, state, state1, force, flow)
-    #  logger.print_metrics(metrics_)
-    metrics = update_ft_metrics(metrics, metrics_)
-
-    for _ in range(param.nstep - 1):
-        state = State(x, p)
-        x = x + dt * p
-
-        metrics_ = get_ft_metrics(param, State(x, p), state, force, flow)
-        #  logger.print_metrics(metrics_)
-        metrics = update_ft_metrics(metrics, metrics_)
-
-        force = qed.ft_force(param, flow, x)
-        p = p + (-dt) * force
-
-        #  x1 = x1 + dt * p1
-        #  force = qed.ft_force(param, flow, x1)
-        #  p1 = p1 + (-dt) * force
-
-    x = x + 0.5 * dt * p
-    metrics_ = get_ft_metrics(param, State(x, p), state, force, flow)
-    metrics = update_ft_metrics(metrics, metrics_)
-    logger.print_metrics(metrics)
-
-    return State(x, p), metrics
-
-
-def ft_hmc(param: Param, flow: list, x: torch.Tensor):
-    x = torch.squeeze(qed.ft_flow_inv(flow, x))
-    p = torch.randn_like(x)
-    plaq0 = qed.ft_action(param, flow, x) + 0.5 * torch.sum(p * p)
-    state1, _ = ft_leapfrog(param, flow, x, p)
-
-    xr = qed.regularize(state1.x)
-    p1_norm = torch.sum(state1.p * state1.p)
-    plaq1 = qed.ft_action(param, flow, xr) + 0.5 * p1_norm
-
-    prob = torch.rand([], dtype=torch.float64)
-    dH = plaq1 - plaq0
-    expdH = torch.exp(-dH)
-    acc = prob < expdH
-    x_ = xr if acc else x
-    field_ = qed.ft_flow(flow, x_)
-    return (dH, expdH, acc, field_)
-
-
-def ft_run(
-        param: Param,
-        flow: list,
-        x: torch.Tensor = None,
-        keep_fields: bool = False,
-        logger: io.Logger = None
-):
-    """Run generic HMC."""
-    if x is None:
-        x = param.initializer()
-
-    fields_arr = []
-    metrics = {k: [] for k in METRIC_NAMES}
-    logger.log(repr(param))
-    observables = get_observables(param, x)
-    logger.print_metrics(asdict(observables))
-    history = traj_metrics = {}
-    for n in range(param.nrun):
-        t0 = time.time()
-        fields = []
-        for i in range(param.ntraj):
-            #  x = torch.squeeze(x)[None, :]
-            dH, expdH, acc, x = ft_hmc(param, flow, x[None, :])
-            observables = get_observables(param, x)
-            traj_metrics = {
-                'traj': n * param.ntraj + i + 1,
-                'accept': acc,
-                'dH': dH,
-                'expdH': expdH,
-                'plaq': observables.plaq,
-                'charge': observables.charge,
-            }
-            if (i + 1) % (param.ntraj // param.nprint) == 0:
-                _ = logger.print_metrics(traj_metrics)
-
-            if keep_fields:
-                fields.append(x)
-        if keep_fields:
-            fields_arr.append(fields)
-
-        dt = time.time() - t0
-        metrics['dt'].append(dt)
-        for key, val in traj_metrics.items():
-            metrics[key].append(val)
-
-    dt = metrics['dt']
-    logger.log(f'Run times: {dt}')
-    logger.log(f'Per trajectory: {[t / param.ntraj for t in dt]}')
-
-    if keep_fields:
-        return fields_arr, metrics
-
-    return fields, metrics
-
+ActionFn = Callable[[float], torch.Tensor]
 
 def train_step(
         model: dict[str, nn.Module],
@@ -260,7 +121,6 @@ def train_step(
         force_factor: float = 1.,
         dkl_factor: float = 1.,
         scaler: GradScaler = None,
-        #  verbose: bool = False,
 ):
     """Perform a single training step.
 
@@ -325,17 +185,17 @@ def train_step(
     batch_metrics = {
         'dt': time.time() - t0,
         'loss': grab(loss),
-        'q': grab(q),
-        'dqsq': grab(dqsq),
         'ess': grab(ess),
-        'plaq': grab(plaq),
-        'loss_dkl': grab(loss_dkl),
         'logp': grab(logp),
         'logq': grab(logq),
+        'q': grab(q),
+        'dqsq': grab(dqsq),
+        'plaq': grab(plaq),
+        #  'loss_dkl': grab(loss_dkl),
     }
     if with_force:
         batch_metrics.update({
-            'loss_force': force_factor * grab(loss_force),
+            #  'loss_force': force_factor * grab(loss_force),
             'force_size': grab(force_size),
             'force_norm': grab(force_norm),
         })
@@ -398,6 +258,8 @@ def restore_model_from_checkpoint(
     return {'model': model, 'optimizer': optimizer}
 
 
+PlotData = plotter.LivePlotData
+
 def train(
         param: Param,
         config: TrainConfig,
@@ -406,12 +268,15 @@ def train(
         figsize: tuple = (5, 2),
         force_factor: float = 0.01,
         dkl_factor: float = 1.,
-        history: dict[[str], list] = None,
-        #  outdir: Union[str, Path] = None,
+        history: dict[str, list] = None,
+        weight_decay: float = 1e-5,
 ):
     """Train the flow model."""
     if model is None:
         model = get_model(param, config)
+
+    if history is None:
+        history = {}
 
     if torch.cuda.is_available():
         model['layers'].cuda()
@@ -428,31 +293,27 @@ def train(
         'plots': os.path.join(train_dir, 'plots'),
         'ckpts': os.path.join(train_dir, 'checkpoints'),
     }
-    check_else_make_dir(list(dirs.values()))
+    logging.check_else_make_dir(list(dirs.values()))
 
     u1_action = qed.BatchAction(param.beta)
 
     optimizer_dkl = optim.AdamW(model['layers'].parameters(),
-                                lr=config.base_lr, weight_decay=1e-5)
+                                lr=config.base_lr, weight_decay=weight_decay)
 
     optimizer_force = None
     if force_factor > 0:
         lr_force = config.base_lr / 100.0
         optimizer_force = optim.AdamW(model['layers'].parameters(),
-                                      lr=lr_force, weight_decay=1e-5)
+                                      lr=lr_force, weight_decay=weight_decay)
 
-    if history is None:
-        history = {}
-
+    optimizer = optimizer_dkl
     if config.with_force and force_factor > 0:
         optimizer = optimizer_force
-    else:
-        optimizer = optimizer_dkl
 
-    interactive = in_notebook()
+    interactive = logging.in_notebook()
     plots = {}
     if interactive:
-        plots = init_plots(config, param, figsize=figsize)
+        plots = plotter.init_plots(config, param, figsize=figsize)
 
     dt = 0.0
     step = 0
@@ -486,7 +347,7 @@ def train(
                                      dkl_factor=dkl_factor,
                                      force_factor=force_factor)
 
-            step_info = {'epoch': int(epoch+2), 'step': int(step+1)}
+            step_info = {'epoch': int(epoch+3)}  # , 'step': int(step+2)}
             history = update_history(history, metrics, extras=step_info)
 
             if step % print_freq == 0:
@@ -494,32 +355,49 @@ def train(
                 running_avgs = running_averages(history, n_epochs=window)
                 logger.print_metrics(running_avgs, skip=['q'])
 
-            #  if (epoch + 1) % config.plot_freq == 0 and interactive:
             if step % plot_freq == 0 and interactive:
+                #  step_info = {'epoch': int(epoch+1)}  # , 'step': int(step+2)}
+                #  history = update_history(history, metrics, extras=step_info)
                 #  dq = np.array(history['dq'])
                 #  window = min((epoch, 10))
 
                 #  dq = np.array(history['dq'])[-window:]
-                update_plot(y=np.array(history['dqsq']).mean(axis=-1),
-                            ax=plots['dqsq']['ax'],
-                            fig=plots['dqsq']['fig'],
-                            line=plots['dqsq']['line'],
-                            display_id=plots['dqsq']['display_id'])
-
-                loss_data = LivePlotData(history['loss_dkl'],
-                                         plots['dkl']['plot_obj1'])
-                ess_data = LivePlotData(history['ess'],
-                                        plots['dkl']['plot_obj2'])
-                update_joint_plots(loss_data, ess_data,
-                                   plots['dkl']['display_id'])
+                #  plot_metrics = {
+                #      'dqsq': history['dqsq'],
+                #      'loss_dkl': history['loss'],
+                #      'ess': history['ess'],
+                #  }
+                #  pavgs = running_averages(plot_metrics,
+                #                           n_epochs=min(epoch, 5))
+                #  dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
+                window = min(epoch, 5)
+                dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
+                plotter.update_plot(y=dqsq_avg,
+                                    ax=plots['dqsq']['ax'],
+                                    fig=plots['dqsq']['fig'],
+                                    line=plots['dqsq']['line'],
+                                    display_id=plots['dqsq']['display_id'])
+                #  ess_avg = history['ess'].mean(axis=-1)
+                plot_data = {
+                    'ess': PlotData(history['ess'],
+                                    plots['dkl']['plot_obj2']),
+                    'loss_dkl': PlotData(history['loss'],
+                                         plots['dkl']['plot_obj1']),
+                }
+                plotter.update_joint_plots(plot_data['loss_dkl'],
+                                           plot_data['ess'],
+                                           plots['dkl']['display_id'])
 
                 if config.with_force:
-                    loss_force_data = LivePlotData(history['loss_force'],
-                                                   plots['force']['plot_obj1'])
-                    ess_data = LivePlotData(history['ess'],
-                                            plots['force']['plot_obj2'])
-                    update_joint_plots(loss_force_data, ess_data,
-                                       plots['force']['display_id'])
+                    plot_data.update({
+                        'ess': PlotData(history['ess'],
+                                        plots['force']['plot_obj2']),
+                        'loss_force': PlotData(history['loss_force'],
+                                               plots['force']['plot_obj1']),
+                    })
+                    plotter.update_joint_plots(plot_data['loss_force'],
+                                               plot_data['ess'],
+                                               plots['force']['display_id'])
 
         dt = time.time() - t0
         #  if outdir is not None:
@@ -537,12 +415,12 @@ def train(
                                    outdir=dirs['ckpts'],
                                    optimizer=optimizer)
 
-    save_live_plots(plots, dirs['plots'])
-    plot_history(history, param=param, config=config,
-                 skip=['epoch', 'step'],
-                 num_chains=2, thin=0,
-                 therm_frac=0.0, alpha=0.8,
-                 xlabel='Epoch', outdir=dirs['plots'])
+    plotter.save_live_plots(plots, dirs['plots'])
+    plotter.plot_history(history, param=param, config=config,
+                         skip=['epoch', 'step'],
+                         num_chains=2, thin=0,
+                         therm_frac=0.0, alpha=0.8,
+                         xlabel='Epoch', outdir=dirs['plots'])
 
     hfile = os.path.join(train_dir, 'train_history.z')
     io.save_history(history, hfile, name='train_history')
