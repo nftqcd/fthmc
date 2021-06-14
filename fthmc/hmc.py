@@ -1,37 +1,45 @@
 """
 hmc.py
 """
+from __future__ import absolute_import, print_function, division, annotations
 
 from fthmc.utils.plot_helpers import plot_history
 from fthmc.config import LOGS_DIR
 import os
-from pathlib import Path
-from typing import Union
 import torch
-from fthmc.utils.param import Param
+from fthmc.config import Param
 import fthmc.utils.io as io
 from fthmc.utils.logger import Logger, check_else_make_dir, savez
 import time
-import numpy as np
 
 import fthmc.utils.qed_helpers as qed
-from fthmc.train import get_observables, METRIC_NAMES, update_history
+from fthmc.train import get_observables  # , update_history
+from math import pi as PI
+
 
 logger = Logger()
+TWO_PI = 2. * PI
+
 
 def grab(x: torch.Tensor):
     return x.detach().cpu().numpy()
 
+
 def run_hmc(
         param: Param,
-        x: torch.Tensor = None,
-        keep_fields: bool = True,
-        save_history: bool = True,
+        #  x: torch.Tensor = None,
+        #  keep_fields: bool = True,
         plot_metrics: bool = True,
 ):
-    """Run generic HMC."""
-    if x is None:
-        x = param.initializer()
+    """Run generic HMC.
+
+    Explicitly, we perform `param.nrun` independent experiments
+    Explicitly, run `param.nrun` identitical `param.ntraj` trajectories
+    """
+    #  if x is None:
+    #      x = param.initializer()
+    #
+    #  x_init = x.clone()
 
     logdir = os.path.join(LOGS_DIR, 'hmc', param.uniquestr())
     if os.path.isdir(logdir):
@@ -41,109 +49,94 @@ def run_hmc(
     check_else_make_dir(plots_dir)
 
     fields_arr = []
+    action = qed.BatchAction(param.beta)
     #  metrics = {k: [] for k in METRIC_NAMES}
     logger.log(repr(param))
-    observables = get_observables(param, x)
-    logger.print_metrics(observables._metrics)
-    action = qed.BatchAction(param.beta)
-    q = qed.batch_charges(x[None, :])
-    history = {}
+
+    histories = {}
+    run_times = []
+    dt_run = 0.
     for n in range(param.nrun):
         t0 = time.time()
-        fields = []
-        metrics = {
-            'dt': [0], 'traj': [0], 'accept': [True], 'dH': [0.],
-            'expdH': [0.], 'q': [q], 'dqsq': [0], 'logp': [0.], 'plaq': [0.]
+
+        hstr = f'RUN: {n}, last took: {int(dt_run//60)} m {dt_run%60:.4g} s'
+        line = len(hstr) * '-'
+        logger.log('\n'.join([line, hstr, line]))
+
+        x = param.initializer()
+        p = (-1.) * action(x[None, :]) / (param.beta * param.volume)
+        q = qed.batch_charges(x[None, :])
+
+        logger.print_metrics({'plaq': p, 'q': q})
+        #  observables = get_observables(param, x)
+        #  action = qed.BatchAction(param.beta)
+        #  q = qed.batch_charges(x[None, :])
+        #  logp = -action(param, x)
+        #  plaq = -action(x[None, :]) / (param.beta * param.volume)
+        xarr = []
+        history = {
+            'dt': [0.],
+            'traj': [0],
+            'acc': [1.],
+            'dH': [0.],
+            'q': [q],
+            'dqsq': [0],
+            'plaq': [p],
         }
         for i in range(param.ntraj):
             t1 = time.time()
-            #  q0 = qed.batch_charges(x[None, :])
-            #  x0 = x.clone()[None, :]
-            dH, expdH, acc, x = qed.hmc(param, x, verbose=False)
+            dH, exp_mdH, acc, x = qed.hmc(param, x, verbose=False)
+
+            qold = history['q'][-1]
             qnew = qed.batch_charges(x[None, :])
-            qold = metrics['q'][-1]
-
-
             dqsq = (int(qnew) - int(qold)) ** 2
-            #  x1 = x.clone()[None, :]
+            plaq = (-1.) * action(x[None, :]) / (param.beta * param.volume)
 
-            #  if i > 1:
-            #      q0 = metrics['q1'][-1]
-            #  else:
-            #      q0 = qed.batch_charges(x[None, :])
-            #
-            #  q1 = qed.batch_charges(x[None, :])
-            #  q1 = qed.batch_charges(x1)
-            #  q0 = qed.batch_charges(x0)
-            #  dqsq = (int(q1) - int(q0)) ** 2
-            #  q1 = qed.batch_charges(x[None, :])
-
-            #  dqsq = (q1 - q0) ** 2,
-
-            logp = (-1.) * action(x[None, :])
-            metrics_ = {
-                'dt': time.time() - t1,
+            #  p = plaq(param, x)
+            #  qnew = charge(x=x)
+            #  observables = get_observables(param, x)
+            #  qnew = observables.charge
+            xarr.append(x)
+            metrics = {
                 'traj': n * param.ntraj + i + 1,
+                'dt': time.time() - t1,
                 'accept': 'True' if acc else 'False',
                 'dH': dH,
-                'expdH': expdH,
                 'q': int(qnew),
-                #  'q0': int(q0),
-                #  'q1': int(q1),
                 'dqsq': dqsq,
-                #  'q0': int(q0),
-                #  'q1': int(q1),
-                'logp': logp,
-                'plaq': logp / (param.beta * param.volume),
-                #  'action': observables.action,
-                #  'plaq': observables.plaq,
-                #  'charge': observables.charge,
+                'plaq': p,
             }
-            for k, v in metrics_.items():
-                if isinstance(v, torch.Tensor):
-                    v = grab(v)
+            for k, v in metrics.items():
                 try:
-                    metrics[k].append(v)
+                    history[k].append(v)
                 except KeyError:
-                    metrics[k] = [v]
+                    history[k] = [v]
 
-            if (i - 1) % (param.ntraj // param.nprint) == 0:
-                _ = logger.print_metrics(metrics_)
+            #  if (i - 1) % (param.ntraj // param.nprint) == 0:
+            if (i - 1) % param.nprint == 0:
+                _ = logger.print_metrics(metrics)
 
-            fields.append(x)
+        dt = time.time() - t0
+        run_times.append(dt)
+        histories[n] = history
+        fields_arr.append(xarr)
 
         if plot_metrics:
             outdir = os.path.join(plots_dir, f'run{n}')
             check_else_make_dir(outdir)
-            plot_history(metrics, param, therm_frac=0.0,
+            plot_history(history, param, therm_frac=0.0,
                          xlabel='traj', outdir=outdir)
 
-        #  if keep_fields:
-        history = update_history(history, metrics,
-                                 extras={'run': n})
-        #plot_history(history, param, therm_frac=0.0, xlabel='run
-        fields_arr.append(fields)
+    run_times_strs = [f'{dt:.4f}' for dt in run_times]
+    dt_strs = [f'{dt/param.ntraj:.4f}' for dt in run_times]
 
-        dt = time.time() - t0
-        history['dt'].append(dt)
-        #  for key, val in traj_metrics.items():
+    logger.log(f'Run times: {run_times_strs}')
+    logger.log(f'Per trajectory: {dt_strs}')
 
-    dt = history['dt']
-    logger.log(f'Run times: {[np.round(t, 6) for t in dt]}')
-    logger.log(
-        f'Per trajectory: '
-        f'{[np.round(np.array(t) / param.ntraj, 6) for t in dt]}'
-    )
+    hfile = os.path.join(logdir, f'hmc_histories.z')
+    io.save_history(histories, hfile, name='hmc_histories')
 
-    #  if logdir is not None:
-    if keep_fields:
-        hfile = os.path.join(logdir, f'hmc_history.z')
-        io.save_history(history, hfile, name='hmc_history')
-        if keep_fields:
-            xfile = os.path.join(logdir, 'hmc_fields_arr.z')
-            savez(fields_arr, xfile, name='hmc_fields_arr')
+    xfile = os.path.join(logdir, 'hmc_fields_arr.z')
+    savez(fields_arr, xfile, name='hmc_fields_arr')
 
-    if keep_fields:
-        return fields_arr, history
-
-    return x, history
+    return fields_arr, histories
