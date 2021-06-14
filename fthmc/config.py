@@ -1,9 +1,11 @@
 """
 config.py
 
-Contains various utilities used throughout the project.
+Contains definitions of `Param` object specifying parameters of the lattice,
+and `TrainConfig` object specifying parameters of the training run.
 """
 from __future__ import absolute_import, annotations, print_function
+from functools import reduce
 
 import os
 from dataclasses import dataclass, field
@@ -14,7 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import utils.io as io
+from fthmc.utils.logger import Logger, get_timestamp
 
 __author__ = 'Sam Foreman'
 __date__ = '05/23/2021'
@@ -28,80 +30,121 @@ PINK = '#F92672'
 BLUE = '#007dff'
 RED = '#ff4050'
 
-
-
-NOW = io.get_timestamp('%Y-%m-%d-%H%M%S')
+NOW = get_timestamp('%Y-%m-%d-%H%M%S')
 METRIC_NAMES = ['dt', 'accept', 'traj', 'dH', 'expdH', 'plaq', 'charge']
 
-logger = io.Logger()
+logger = Logger()
 TWO_PI = 2 * PI
 
 
-ActionFn = Callable[[float], torch.Tensor]
 LossFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 def grab(x: torch.Tensor):
     return x.detach().cpu().numpy()
 
+
 def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
 
 
-from fthmc.utils.param import Param
-
 @dataclass
-class qedMetrics:
-    param: Param
-    action: torch.Tensor
-    plaq: torch.Tensor
-    charge: torch.Tensor
+class Param:
+    beta: float = 6.0       # Inverse coupling constant
+    L: int = 8              # Linear extent of square lattice, (L x L)
+    tau: float = 2.0        # Trajectory length
+    nstep: int = 50         # Number of leapfrog steps / trajectory
+    ntraj: int = 256        # Number of trajectories to generate for HMC
+    nrun: int = 4           # Number of indep. HMC experiments to run
+    nprint: int = 256       # How frequently to print metrics during HMC
+    seed: int = 11 * 13     # Random seed
+    randinit: bool = False  # Start from randomly initialized configuration?
+    nth_interop: int = 2    # Number of interop threads
+    nth: int = int(os.environ.get('OMP_NUM_THREADS', '2'))  # n OMP threads
 
     def __post_init__(self):
-        self._metrics = {
-            'action': self.action,
-            'plaq': self.plaq,
-            'charge': self.charge
-        }
+        self.lat = [self.L, self.L]
+        self.nd = len(self.lat)
+        self.shape = [self.nd, *self.lat]
+        #  self.shape = [self.batch_size, self.nd, *self.lat]
+        self.volume = reduce(lambda x, y: x * y, self.lat)
+        self.dt = self.tau / self.nstep
 
+    def initializer(self):
+        if self.randinit:
+            return torch.empty([self.nd,] + self.lat).uniform_(-PI, PI)
+        else:
+            return torch.zeros([self.nd,] + self.lat)
 
-@dataclass
-class ftMetrics:
-    force_norm: torch.Tensor
-    ft_action: torch.Tensor
-    p_norm: torch.Tensor
+    def __repr__(self):
+        status = {k: v for k, v in self.__dict__.items()}
+        s = '\n'.join('='.join((str(k), str(v))) for k, v in status.items())
+        return '\n'.join(['Param:', 16 * '-', s])
 
+    def to_json(self):
+        attrs = {k: v for k, v in self.__dict__.items()}
+        return attrs
 
-@dataclass
-class State:
-    x: torch.Tensor
-    p: torch.Tensor
+    def summary(self):
+        return self.__repr__
+
+    def uniquestr(self):
+        lat = "x".join(str(x) for x in self.lat)
+        pstr = [
+            f't{lat}',
+            f'b{self.beta}',
+            f'n{self.ntraj}',
+            f't{self.tau}',
+            f's{self.nstep}',
+        ]
+        ustr = '_'.join(pstr)
+        #  if ext is not None:
+        #      ustr = f'{ustr}.ext'
+
+        return ustr
 
 
 @dataclass
 class TrainConfig:
-    n_era: int = 10
-    n_epoch: int = 100
-    n_layers: int = 24
-    n_s_nets: int = 2
+    n_era: int = 10             # Each `era` consists of `n_epoch` epochs
+    n_epoch: int = 100          # Number of `epochs` (loss + backprop)
+    batch_size: int = 64        # Number of chains to maintain in parallel
+    base_lr: float = 0.001      # Base learning rate
+    n_s_nets: int = 2           # Number of (RealNVP) coupling layers, `s_net`
+    n_layers: int = 24          # Number of hidden layers in each `s_net`
+    kernel_size: int = 3        # Kernel size in Conv2D layers
+    with_force: bool = False    # Minimize force norm during training
+    print_freq: int = 50        # How frequently to print training metrics
+    plot_freq: int = 50         # How frequently to update training plots
+    # Sizes of hidden layers between convolutional layers
     hidden_sizes: list[int] = field(default_factory=lambda: [8, 8])
-    kernel_size: int = 3
-    base_lr: float = 0.001
-    batch_size: int = 64
-    print_freq: int = 10
-    plot_freq: int = 20
-    with_force: bool = False
 
+    def uniquestr(self):
+        hstr = ''.join([f'{i}' for i in self.hidden_sizes])
+        pstrs = [
+            f'nb{self.batch_size}',
+            f'nh{self.n_layers}',
+            f'ns{self.n_s_nets}',
+            f'ks{self.kernel_size}',
+            f'hl{hstr}',
+            f'lr{self.base_lr}',
+            f'era{self.n_era}',
+            f'epoch{self.n_epoch}',
+        ]
+        if self.with_force:
+            pstrs += '_force'
 
+        ustr = '_'.join(pstrs)
 
+        return ustr
 
-@dataclass
-class PlotObject:
-    #  fig: plt.Figure
-    ax: plt.Axes
-    line: list[plt.Line2D]
+    def __repr__(self):
+        status = {k: v for k, v in self.__dict__.items()}
+        s = '\n'.join('='.join((str(k), str(v))) for k, v in status.items())
+        return '\n'.join(['TrainConfig:', 16 * '-', s])
 
+    def to_json(self):
+        attrs = {k: v for k, v in self.__dict__.items()}
+        return attrs
 
-@dataclass
-class LivePlotData:
-    data: Any
-    plot_obj: PlotObject
+    def summary(self):
+        return self.__repr__

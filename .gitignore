@@ -5,3 +5,9 @@
 *logs*
 *Untitled.ipynb*
 .vim
+.vscode/
+*.out
+pyrightconfig.json
+*.ipynb_checkpoints
+flow_test_sam/
+plots/

@@ -3,167 +3,45 @@ io.py
 
 Contains helper functions for file IO.
 """
-from __future__ import absolute_import, print_function, division, annotations
-from dataclasses import dataclass, asdict
-from functools import wraps
+from __future__ import absolute_import, annotations, division, print_function
+
+import datetime
 import os
 import shutil
+from dataclasses import asdict, dataclass
+from functools import wraps
+from pathlib import Path
+from typing import Any, Dict, Union
+
 import joblib
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from typing import Union, Dict
-import datetime
-from pathlib import Path
+import torch.optim as optim
 
-from fthmc.utils.param import Param
+from fthmc.config import LOGS_DIR, Param, TrainConfig
+from fthmc.utils.logger import (Logger, check_else_make_dir, get_timestamp,
+                                savez, strformat)
 
-
+logger = Logger()
 WIDTH, HEIGHT = shutil.get_terminal_size(fallback=(156, 50))
 
-def in_notebook():
-    """Simple checker function to see if we're currently in a notebook."""
-    try:
-        from IPython import get_ipython
-        if 'IPKernelApp' not in get_ipython().config:
-            return False
-    except ImportError:
-        return False
-    return True
+def get_logdir(param: Param, config: TrainConfig):
+    """Returns dictionary of unique directories for a given experiment."""
+    logdir = os.path.join(LOGS_DIR, param.uniquestr())
+    if config is None:
+        return logdir
+
+    logdir = os.path.join(logdir, config.uniquestr())
+    check_else_make_dir(logdir)
+    return logdir
 
 
-def check_else_make_dir(outdir):
-    if not os.path.isdir(outdir):
-        Logger().log(f'Creating directory: {outdir}')
-        os.makedirs(outdir)
-
-
-def loadz(infile: str):
-    return joblib.load(infile)
-
-
-def savez(obj: dict, fpath: str, name: str = None, logger=None):
-    """Save `obj` to compressed `.z` file at `fpath`."""
-    if logger is None:
-        logger = Logger()
-    head, _ = os.path.split(fpath)
-
-    check_else_make_dir(head)
-
-    if not fpath.endswith('.z'):
-        fpath += '.z'
-
-    if name is not None:
-        logger.log(f'Saving {name} to {os.path.abspath(fpath)}.')
-    else:
-        logger.log(f'Saving {obj.__class__} to {os.path.abspath(fpath)}.')
-
-    joblib.dump(obj, fpath)
-
-
-# noqa: E999
-# pylint:disable=too-few-public-methods,redefined-outer-name
-# pylint:disable=missing-function-docstring,missing-class-docstring
-class Console:
-    """Fallback console object used as in case `rich` isn't installed."""
-    @staticmethod
-    def log(s, *args, **kwargs):
-        now = get_timestamp('%X')
-        print(f'[{now}]  {s}', *args, **kwargs)
-
-
-class Logger:
-    """Logger class for pretty printing metrics during training/testing."""
-    def __init__(self, width=None):
-        #  if width is None:
-        #      if in_notebook():
-        #          #  width = 256
-        #      else:
-        #          width = WIDTH
-        #
-        try:
-            # pylint:disable=import-outside-toplevel
-            from rich.console import Console as RichConsole
-            from rich.theme import Theme
-            theme = None
-            if in_notebook():
-                theme = Theme({
-                    'repr.number': 'bold bright_green',
-                    'repr.attrib_name': 'bold bright_magenta'
-                })
-            console = RichConsole(record=False, log_path=False,
-                                  force_jupyter=in_notebook(),
-                                  log_time_format='[%X] ',
-                                  theme=theme)#, width=width)
-        except (ImportError, ModuleNotFoundError):
-            console = Console()
-
-        self.width = width
-        self.console = console
-
-    def rule(self, s: str, *args, **kwargs):
-        """Print horizontal line."""
-        #  width = kwargs.pop('width', self.width)
-        w = self.width - (8 + len(s))
-        hw = w // 2
-        rule = ' '.join((hw * '-', f'{s}', hw * '-'))
-        self.console.log(f'{rule}\n', *args, **kwargs)
-
-    def log(self, s: str, *args, **kwargs):
-        """Print `s` using `self.console` object."""
-        self.console.log(s, *args, **kwargs)
-
-    def load_metrics(self, infile: str = None):
-        """Try loading metrics from infile."""
-        return joblib.load(infile)
-
-    def print_metrics(
-        self,
-        metrics: dict,
-        window: int = 0,
-        pre: list = None,
-        outfile: str = None,
-        skip: list[str] = None,
-    ):
-        """Print nicely formatted string of summary of items in `metrics`."""
-        if skip is None:
-            skip = []
-
-        outstr = ' '.join([
-            strformat(k, v, window) for k, v in metrics.items()
-            if k not in skip
-        ])
-        if pre is not None:
-            outstr = ' '.join([*pre, outstr])
-
-        self.log(outstr)
-        if outfile is not None:
-            with open(outfile, 'a') as f:
-                f.write(outstr)
-
-        return outstr
-
-    def save_metrics(
-            self,
-            metrics: dict,
-            outfile: str = None,
-            tstamp: str = None,
-    ):
-        """Save metrics to compressed `.z.` file."""
-        if tstamp is None:
-            tstamp = get_timestamp('%Y-%m-%d-%H%M%S')
-
-        if outfile is None:
-            outdir = os.path.join(os.getcwd(), tstamp)
-            fname = 'metrics.z'
-
-        else:
-            outdir, fname = os.path.split(outfile)
-
-        check_else_make_dir(outdir)
-        outfile = os.path.join(os.getcwd(), tstamp, 'metrics.z')
-        self.log(f'Saving metrics to: {outfile}')
-        savez(metrics, outfile, name=fname.split('.')[0])
+def tstamp_dir(d, fstr=None):
+    tstamp = get_timestamp(fstr)
+    td = os.path.join(d, tstamp)
+    check_else_make_dir(td)
+    return td
 
 
 def rename_with_timestamp(
@@ -171,7 +49,6 @@ def rename_with_timestamp(
     fstr: str = None,
     verbose: bool = True
 ):
-    logger = Logger()
     if not os.path.isfile(outfile):
         return outfile
 
@@ -191,8 +68,9 @@ def rename_with_timestamp(
 
     return outfile
 
+
 def save_history(
-        history: dict[str, np.ndarray],
+        history: dict[str, Any],
         outfile: str,
         name: str = None
 ):
@@ -204,41 +82,71 @@ def save_history(
     savez(history, outfile, name=name)
 
 
-import torch.optim as optim
 
+OptimizerDict = "dict[str, optim.Optimizer]"
+OptimizerList = "Union[tuple[optim.Optimizer], list[optim.Optimizer]]"
+#  OptimizerObject: Union = [
+#      optim.Optimizer,
+#      dict[str, optim.Optimizer],
+#      Union[tuple[optim.Optimizer], list[optim.Optimizer]],
+#  ]
 
 def save_checkpoint(
+        era: int,
         epoch: int,
         model: nn.Module,
-        optimizer: optim.Optimizer,
-        outfile: Union[str, Path],
+        optimizer: Union[optim.Optimizer, OptimizerDict, OptimizerList],
+        outdir: Union[str, Path],
         history: dict[str, list] = None,
         overwrite: bool = False,
 ):
-    logger = Logger()
-    outfile = os.path.abspath(str(outfile))
-    head, _ = os.path.split(outfile)
-    check_else_make_dir(head)
-    if os.path.isfile(outfile) and not overwrite:
-        outfile = rename_with_timestamp(outfile)
+    if not isinstance(optimizer, (optim.Optimizer, dict, tuple, list)):
+        raise ValueError('Expected `optimizer` to be one of: '
+                         '`[optim.Optimizer, dict, tuple, list]`.\n'
+                         f'Receieved: {type(optimizer)}')
 
+    fname = f'ckpt-era{era}-epoch{epoch}.tar'
+    ckpt_dir = os.path.abspath(str(outdir))
+    ckpt_files = [os.path.join(ckpt_dir, i) for i in os.listdir(ckpt_dir)]
+    outfile = os.path.join(ckpt_dir, fname)
+    check_else_make_dir(ckpt_dir)
+    #  outfile = os.path.abspath(str(outfile))
+    #  head, _ = os.path.split(outfile)
+    #  check_else_make_dir(head)
+    #  if os.path.isfile(outfile) and not overwrite:
+    #      outfile = rename_with_timestamp(outfile)
     checkpoint = {
+        'era': era,
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
+        #  'optimizer_state_dict': optimizer.state_dict(),
     }
 
     if history is not None:
-        checkpoint.update({'history': history})
+        checkpoint['history'] = history
+        #  checkpoint.update({'history': history})
+
+    if isinstance(optimizer, optim.Optimizer):
+        checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+
+    if isinstance(optimizer, (tuple, list)):
+        for idx, opt in enumerate(optimizer):
+            checkpoint[f'optimizer{idx}_state_dict'] = opt.state_dict()
+
+    if isinstance(optimizer, dict):
+        for key, val in optimizer.items():
+            checkpoint[f'optimizer_{key}_state_dict'] = val.state_dict()
 
     logger.log(f'Saving checkpoint to: {outfile}')
     torch.save(checkpoint, outfile)
+
+    return outfile
 
 
 def load_checkpoint(
         infile: str,
 ):
-    Logger().log(f'Loading checkpoint from: {infile}')
+    logger.log(f'Loading checkpoint from: {infile}')
     checkpoint = torch.load(infile)
 
     return checkpoint
@@ -248,7 +156,6 @@ def save_model(
         model: Union[nn.Module, dict[str, nn.Module]],
         outfile: str,
 ):
-    logger = Logger()
     head, _ = os.path.split(outfile)
     check_else_make_dir(head)
     if os.path.isfile(outfile):
@@ -267,12 +174,8 @@ def load_model(
         param: Param,
         basedir: str = None,
         name: str = None,
-        logger: Logger = None,
         **kwargs,
 ):
-    if logger is None:
-        logger = Logger()
-
     if basedir is None:
         basedir = os.getcwd()
 
@@ -288,7 +191,6 @@ def load_model(
 
 
 def logit(logfile='out.log'):
-    logger = Logger()
     def logging_decorator(func):
         @wraps(func)
         def wrapped_function(*args, **kwargs):
@@ -303,50 +205,12 @@ def logit(logfile='out.log'):
     return logging_decorator
 
 
-def strformat(k, v, window: int = 0):
-    try:
-        v = v.cpu()
-    except AttributeError:
-        pass
-
-    if isinstance(v, int):
-        return f'{str(k)}={int(v)}'
-
-    if isinstance(v, bool):
-        return f'{str(k)}=True' if v else f'{str(k)}=False'
-
-    if isinstance(v, torch.Tensor):
-        v = v.detach().numpy()
-
-    if isinstance(v, (list, np.ndarray)):
-        v = np.array(v)
-        if window > 0 and len(v.shape) > 0:
-            window = min((v.shape[0], window))
-            avgd = np.mean(v[-window:])
-        else:
-            avgd = np.mean(v)
-
-        return f'{str(k)}={avgd:<4.3f}'
-
-    if isinstance(v, float):
-        return f'{str(k)}={v:<4.3f}'
-    try:
-        return f'{str(k)}={v:<3g}'
-    except ValueError:
-        return f'{str(k)}={v:<3}'
-
-
-
 def print_metrics(
         metrics: dict[str, np.ndarray],
         pre: list[str] = None,
         window: int = 0,
         outfile: str = None,
-        logger: Logger = None,
 ):
-    if logger is None:
-        logger = Logger()
-
     outstr = ' '.join([
         strformat(k, v, window=window) for k, v in metrics.items()
     ])
@@ -362,9 +226,3 @@ def print_metrics(
     return outstr
 
 
-def get_timestamp(fstr: str = None):
-    """Get formatted timestamp."""
-    now = datetime.datetime.now()
-    if fstr is None:
-        return now.strftime('%Y-%m-%d-%H%M%S')
-    return now.strftime(fstr)
