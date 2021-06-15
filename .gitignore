@@ -11,3 +11,5 @@ pyrightconfig.json
 *.ipynb_checkpoints
 flow_test_sam/
 plots/
+yarn.lock
+node_modules/
