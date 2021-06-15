@@ -11,18 +11,12 @@ With slight modifications by Xiao-Yong Jin to reduce global variables
 """
 from __future__ import absolute_import, division, print_function, annotations
 
-import math
-import os
-import sys
-from functools import reduce
-from timeit import default_timer as timer
-
 import numpy as np
 import packaging.version
 import torch
 import torch.nn as nn
 
-from utils.qed_helpers import compute_u1_plaq
+from fthmc.utils.qed_helpers import compute_u1_plaq
 
 if torch.cuda.is_available():
     torch_device = 'cuda'
@@ -33,10 +27,9 @@ else:
     float_dtype = np.float64
     torch.set_default_tensor_type(torch.DoubleTensor)
 
+
 print(f'TORCH DEVICE: {torch_device}')
 
-#  torch_device = 'cpu'
-#  float_dtype = np.float64
 
 def torch_mod(x: torch.Tensor):
     return torch.remainder(x, 2*np.pi)
@@ -59,13 +52,13 @@ def stack_cos_sin(x: torch.Tensor):
 
 
 def tan_transform(x: torch.Tensor, s: torch.Tensor):
-    return torch_mod(2*torch.atan(torch.exp(s)*torch.tan(x/2)))
+    return torch_mod(2 * torch.atan(torch.exp(s) * torch.tan(x / 2)))
 
 
 def tan_transform_logJ(x: torch.Tensor, s: torch.Tensor):
     return -torch.log(
-        torch.exp(-s)*torch.cos(x/2)**2
-        + torch.exp(s)*torch.sin(x/2)**2
+        torch.exp(-s)  * torch.cos(x/2) ** 2
+        + torch.exp(s) * torch.sin(x/2) ** 2
     )
 
 
@@ -322,9 +315,9 @@ class NCPPlaqCouplingLayer(nn.Module):
         fx1 = self.mask['active'] * mixture_tan_transform(x1, s).squeeze(1)
 
         fx = (
-            self.mask['active'] * torch_mod(fx1 + t) +
-            self.mask['passive'] * x +
-            self.mask['frozen'] * x)
+            self.mask['active'] * torch_mod(fx1 + t)
+            + self.mask['passive'] * x
+            + self.mask['frozen'] * x)
         return fx, logJ
 
     def reverse(self, fx: torch.Tensor):

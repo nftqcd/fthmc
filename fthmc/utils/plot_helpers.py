@@ -174,7 +174,7 @@ def plot_metric(
 
 
 def plot_history(
-        history: dict[str, np.ndarray],
+        history: dict[str, Union[list, torch.Tensor, np.ndarray]],
         param: Param,
         therm_frac: float = 0.0,
         config: TrainConfig = None,

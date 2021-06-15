@@ -1,7 +1,13 @@
-import torch
+"""
+distributions.py
+"""
+from __future__ import absolute_import, division, print_function
 import numpy as np
-
+import torch
+import torch.distributions as dist
+import torch.nn as nn
 from torch.distributions.uniform import Uniform
+
 
 def bootstrap(x: np.ndarray, *, nboot: int, binsize: int):
     boots = []
@@ -10,19 +16,14 @@ def bootstrap(x: np.ndarray, *, nboot: int, binsize: int):
         avg = np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
         boots.append(avg)
 
-    #  boots = np.array([
-    #      np.mean(x[np.random.randint(len(x), size=len(x))], axis=(0, 1))
-    #      for _ in range(nboot)
-    #  ])
-
     return np.mean(boots), np.std(boots)
 
 
-def calc_dkl(logp, logq):
+def calc_dkl(logp: torch.Tensor, logq: torch.Tensor):
     return (logq - logp).mean()
 
 
-def calc_ess(logp, logq):
+def calc_ess(logp: torch.Tensor, logq: torch.Tensor):
     logw = logp - logq
     log_ess = (2 * torch.logsumexp(logw, dim=0)
                - torch.logsumexp(2 * logw, dim=0))
@@ -34,10 +35,9 @@ def calc_ess(logp, logq):
     return ess_per_cfg
 
 
-class SimpleNormal(torch.nn.Module):
-    def __init__(self, loc, var):
-        self.dist = torch.distributions.normal.Normal(torch.flatten(loc),
-                                                      torch.flatten(var))
+class SimpleNormal(nn.Module):
+    def __init__(self, loc: torch.Tensor, var: torch.Tensor):
+        self.dist = dist.normal.Normal(torch.flatten(loc), torch.flatten(var))
         self.shape = loc.shape
 
     def log_prob(self, x):
@@ -49,7 +49,7 @@ class SimpleNormal(torch.nn.Module):
         return x.reshape(batch_size, *self.shape)
 
 
-class MultivariateUniform(torch.nn.Module):
+class MultivariateUniform(nn.Module):
     """Uniformly draw samples from [a, b]."""
     def __init__(self, a, b):
         super().__init__()

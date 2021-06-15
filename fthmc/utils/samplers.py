@@ -2,7 +2,7 @@
 samplers.py
 """
 from __future__ import absolute_import, division, print_function, annotations
-from typing import Callable
+from typing import Callable, Union
 
 import torch
 import numpy as np
@@ -10,15 +10,24 @@ from fthmc.utils.distributions import calc_dkl, calc_ess
 import fthmc.utils.qed_helpers as qed
 
 import torch.nn as nn
-import fthmc.utils.io as io
 from fthmc.utils.distributions import bootstrap
+from fthmc.utils.logger import Logger
 
 
-def grab(x: torch.Tensor) -> np.ndarray:
-    if isinstance(x, (np.ndarray, np.float32, np.float64)):
-        return x
+NumpyFloat = Union[np.float16, np.float32, np.float64]
+NumpyObject = Union[np.ndarray, NumpyFloat]
+TensorLike = Union[list, NumpyObject, torch.Tensor]
 
-    return x.detach().cpu().numpy()
+logger = Logger()
+
+
+def grab(x: TensorLike):
+    #  if isinstance(x, (np.ndarray, np.float32, np.float64)):
+    #      return x
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+
+    return np.array(x)
 
 
 def list_to_arr(x: list):
@@ -35,7 +44,7 @@ def apply_flow_to_prior(prior, coupling_layers, *, batch_size, xi=None):
         x, logdet = layer.forward(x)
         logq = logq - logdet
 
-    return xi, x, logq
+    return x, xi, logq
 
 
 ActionFn = Callable[[float], torch.Tensor]
@@ -47,12 +56,8 @@ def generate_ensemble(
         batch_size: int = 64,
         nboot: int = 100,
         binsize: int = 16,
-        logger: io.Logger = None,
 ):
     """Calculate the topological susceptibility by generating an ensemble."""
-    if logger is None:
-        logger = io.Logger()
-
     history = make_mcmc_ensemble(model, action, batch_size, ensemble_size)
     qarr = np.array([grab(i) for i in history['q']])
     qsq_mean, qsq_err = bootstrap(qarr ** 2, nboot=nboot, binsize=binsize)
@@ -64,7 +69,6 @@ def generate_ensemble(
 
     return {
         'history': history,
-        #  'ensemble': history,
         'suscept_mean': qsq_mean,
         'suscept_err': qsq_err,
     }
@@ -87,21 +91,21 @@ def serial_sample_generator(model, action_fn, batch_size, num_samples):
 
 
 def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
+    xarr = []  # for holding the configurations
     names = ['ess', 'q', 'dqsq', 'dkl', 'logq', 'logp', 'accepted']
     history = {
         name: [] for name in names
     }
-    xarr = []
 
     # Build Markov chain
     sample_gen = serial_sample_generator(model, action_fn, batch_size,
                                          num_samples)
     with torch.no_grad():
         for x_new, q_new, logq_new, logp_new in sample_gen:
-            if len(history['logp']) == 0:  # always accept the first proposal
+            # Always accept the first proposal
+            if len(history['logp']) == 0:
                 accepted = True
                 q_old = q_new
-                #  q_old = qed.batch_charges(x_new[None, :])
             else:
                 q_old = history['q'][-1]
                 logp_old = history['logp'][-1]
@@ -129,7 +133,6 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
                 'ess': calc_ess(logp_new, logq_new),
                 'logp': logp_new,
                 'logq': logq_new,
-                #  'x': x_new,
                 'accepted': accepted,
             }
 
@@ -138,45 +141,7 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
                     history[key].append(val)
                 except KeyError:
                     history[key] = [val]
-            #
-            #
-            #  history['q'].append(grab(q_new))
-            #  history['dqsq'].append((q_new - q_old) ** 2)
-            #  history['dkl'].append(calc_dkl(logp_new, logq_new))
-            #  history['ess'].append(calc_ess(logp_new, logq_new))
-            #
-            #  history['logp'].append(logp_new)
-            #  history['logq'].append(logq_new)
-            #  history['x'].append(x_new)
-            #  history['accepted'].append(accepted)
-
     history_ = {
-        k: torch.Tensor(v).numpy() for k, v in history.items()
+        k: torch.Tensor(v).cpu().numpy() for k, v in history.items()
     }
-    #  history = {
-    #      k: np.array([
-    #          grab(torch.stack(z)) if isinstance(z, torch.Tensor)
-    #          else grab(np.stack(z)) for z in v
-    #      ]) for k, v in history.items()
-    #  }
-    #          grab(z) if isinstance(z, torch.Tensor) else z for z in v
-    #      ])) for k, v in history.items()
-    #  }
-    #  history_ = {k: torch.Tensor(v).numpy() for k, v in history.items()}
-    #  for key, val in history.items():
-    #      history_[key] = np.array(val)
-    #      #  history_[key] = np.array(np.stack([
-    #      #      grab(x) if isinstance(x, torch.Tensor) else x
-    #      #      for x in val
-    #      #  ]))
-    #      try:
-    #          arr = np.array(val)
-    #      except TypeError:
-    #          arr = np.array(np.stack([
-    #              grab(x) if isinstance(x, torch.Tensor) else x
-    #              for x in val
-    #          ]))
-    #
-    #      history_[key] = arr
-
     return history_

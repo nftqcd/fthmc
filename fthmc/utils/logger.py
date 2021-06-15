@@ -26,7 +26,6 @@ def in_notebook():
     return True
 
 
-
 def get_timestamp(fstr: str = None):
     """Get formatted timestamp."""
     now = datetime.datetime.now()
@@ -50,15 +49,6 @@ def strformat(
 
     if torch.is_tensor(v):
         v = v.detach().cpu().numpy()  # torch.Tensor
-    #  if isinstance(v, torch.Tensor):
-    #      v = v.detach().cpu().numpy()
-    #  if isinstance(v, torch.Tensor):
-    #      v = v.detach().numpy()
-
-    #  try:
-    #      v = v.cpu()
-    #  except AttributeError:
-    #      pass
 
     if isinstance(v, int):
         return f'{str(k)}={int(v)}'
@@ -74,10 +64,8 @@ def strformat(
         if window > 0 and len(v.shape) > 0:
             window = min((v.shape[0], window))
             avgd = v[-window:].mean()
-            #  avgd = np.mean(v[-window:])
         else:
             avgd = v.mean()
-            #  avgd = np.mean(v)
 
         return f'{str(k)}={avgd:<4.3f}'
 
@@ -92,6 +80,10 @@ def strformat(
 # pylint:disable=missing-function-docstring,missing-class-docstring
 class Console:
     """Fallback console object used as in case `rich` isn't installed."""
+    def rule(self, s, *args, **kwargs):
+        line = len(s) * '-'
+        self.log('\n'.join([line, s, line]), *args, **kwargs)
+
     @staticmethod
     def log(s, *args, **kwargs):
         now = get_timestamp('%X')
@@ -101,17 +93,22 @@ class Console:
 
 class Logger:
     """Logger class for pretty printing metrics during training/testing."""
-    def __init__(self, width=None):
+    def __init__(self, width=None, theme: dict[str, str] = None):
         try:
             # pylint:disable=import-outside-toplevel
             from rich.console import Console as RichConsole
             from rich.theme import Theme
             theme = None
             if in_notebook():
-                theme = Theme({
-                    'repr.number': 'bold bright_green',
-                    'repr.attrib_name': 'bold bright_magenta'
-                })
+                if theme is None:
+                    theme = {
+                        'repr.number': 'bold #87ff00',
+                        'repr.attrib_name': 'bold #ff5fff',
+                        'repr.str': 'italic #FFFF00',
+                    }
+
+                theme = Theme(theme)
+
             console = RichConsole(record=False, log_path=False,
                                   force_jupyter=in_notebook(),
                                   log_time_format='[%X] ',
@@ -124,11 +121,7 @@ class Logger:
 
     def rule(self, s: str, *args, **kwargs):
         """Print horizontal line."""
-        #  width = kwargs.pop('width', self.width)
-        w = self.width - (8 + len(s))
-        hw = w // 2
-        rule = ' '.join((hw * '-', f'{s}', hw * '-'))
-        self.console.log(f'{rule}\n', *args, **kwargs)
+        self.console.rule(s, *args, **kwargs)
 
     def log(self, s: str, *args, **kwargs):
         """Print `s` using `self.console` object."""
@@ -158,13 +151,6 @@ class Logger:
             fstrs = [*pre, fstrs]
 
         outstr = ' '.join(fstrs)
-        #  outstr = ' '.join([
-        #      strformat(k, v, window) for k, v in metrics.items()
-        #      if k not in skip
-        #  ])
-        #  if pre is not None:
-        #      outstr = ' '.join([*pre, outstr])
-        #
         self.log(outstr)
         if outfile is not None:
             with open(outfile, 'a') as f:
@@ -200,12 +186,8 @@ def check_else_make_dir(outdir: Union[str, Path, list, tuple]):
         Logger().log(f'Creating directory: {os.path.relpath(outdir)}')
         os.makedirs(str(outdir))
 
-    #  if not os.path.isdir(outdir):
-    #      Logger().log(f'Creating directory: {outdir}')
-    #      os.makedirs(outdir)
     elif isinstance(outdir, (tuple, list)):
         _ = [check_else_make_dir(str(d)) for d in outdir]
-
 
 
 def loadz(infile: str):
@@ -227,8 +209,3 @@ def savez(obj: Any, fpath: str, name: str = None):
         Logger().log(f'Saving {obj.__class__} to {os.path.relpath(fpath)}.')
 
     joblib.dump(obj, fpath)
-
-
-
-
-
