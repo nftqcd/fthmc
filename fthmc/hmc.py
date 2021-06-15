@@ -33,14 +33,9 @@ def run_hmc(
 ):
     """Run generic HMC.
 
-    Explicitly, we perform `param.nrun` independent experiments
-    Explicitly, run `param.nrun` identitical `param.ntraj` trajectories
+    Explicitly, we perform `param.nrun` independent experiments, where each
+    experiment consists of generating `param.ntraj` trajectories.
     """
-    #  if x is None:
-    #      x = param.initializer()
-    #
-    #  x_init = x.clone()
-
     logdir = os.path.join(LOGS_DIR, 'hmc', param.uniquestr())
     if os.path.isdir(logdir):
         logdir = io.tstamp_dir(logdir)
@@ -48,31 +43,24 @@ def run_hmc(
     plots_dir = os.path.join(logdir, 'plots')
     check_else_make_dir(plots_dir)
 
-    fields_arr = []
     action = qed.BatchAction(param.beta)
-    #  metrics = {k: [] for k in METRIC_NAMES}
     logger.log(repr(param))
 
+    dt_run = 0.
     histories = {}
     run_times = []
-    dt_run = 0.
+    fields_arr = []
     for n in range(param.nrun):
         t0 = time.time()
 
         hstr = f'RUN: {n}, last took: {int(dt_run//60)} m {dt_run%60:.4g} s'
-        line = len(hstr) * '-'
-        logger.log('\n'.join([line, hstr, line]))
+        logger.rule(hstr)
 
         x = param.initializer()
         p = (-1.) * action(x[None, :]) / (param.beta * param.volume)
         q = qed.batch_charges(x[None, :])
 
         logger.print_metrics({'plaq': p, 'q': q})
-        #  observables = get_observables(param, x)
-        #  action = qed.BatchAction(param.beta)
-        #  q = qed.batch_charges(x[None, :])
-        #  logp = -action(param, x)
-        #  plaq = -action(x[None, :]) / (param.beta * param.volume)
         xarr = []
         history = {
             'dt': [torch.tensor(0.)],
@@ -90,13 +78,11 @@ def run_hmc(
             qold = history['q'][-1]
             qnew = qed.batch_charges(x[None, :])
             dqsq = (int(qnew) - int(qold)) ** 2
+
             plaq = (-1.) * action(x[None, :]) / (param.beta * param.volume)
 
-            #  p = plaq(param, x)
-            #  qnew = charge(x=x)
-            #  observables = get_observables(param, x)
-            #  qnew = observables.charge
             xarr.append(x)
+
             metrics = {
                 'traj': n * param.ntraj + i + 1,
                 'dt': time.time() - t1,

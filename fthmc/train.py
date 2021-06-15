@@ -10,7 +10,7 @@ import time
 from dataclasses import asdict, dataclass
 from math import pi as PI
 from pathlib import Path
-from typing import Callable, Union
+from typing import Any, Callable, Union
 
 import numpy as np
 import torch
@@ -28,7 +28,6 @@ from fthmc.utils.layers import (get_nets, make_net_from_layers,
                                 make_u1_equiv_layers, set_weights)
 from fthmc.utils.samplers import apply_flow_to_prior
 
-#  logger = io.Logger()
 logger = logging.Logger()
 TWO_PI = 2 * PI
 
@@ -116,6 +115,7 @@ def train_step(
         action: ActionFn,
         optimizer: optim.Optimizer,
         batch_size: int,
+        scheduler: Any = None,
         with_force: bool = False,
         pre_model: dict[str, nn.Module] = None,
         force_factor: float = 1.,
@@ -130,6 +130,12 @@ def train_step(
     layers, prior = model['layers'], model['prior']
     optimizer.zero_grad()
 
+    loss_dkl = torch.tensor(0.0)
+    loss_force = torch.tensor(0.0)
+    if torch.cuda.is_available():
+        loss_dkl = loss_dkl.cuda()
+        loss_force = loss_force.cuda()
+
     xi = None
     if pre_model is not None:
         pre_layers, pre_prior = pre_model['layers'], pre_model['prior']
@@ -137,23 +143,15 @@ def train_step(
         x = qed.ft_flow(pre_layers, pre_xi)
         xi = qed.ft_flow_inv(layers, x)
 
-    xi, x, logq = apply_flow_to_prior(prior, layers, xi=xi,
+    x, xi, logq = apply_flow_to_prior(prior, layers, xi=xi,
                                       batch_size=batch_size)
     logp = (-1.) * action(x)
     dkl = calc_dkl(logp, logq)
-
-    #  loss = torch.tensor(0.0)
-    loss_dkl = torch.tensor(0.0)
-    loss_force = torch.tensor(0.0)
-    if torch.cuda.is_available():
-        loss_dkl.cuda()
-        loss_force.cuda()
 
     ess = calc_ess(logp, logq)
     qi = qed.batch_charges(xi)
     q = qed.batch_charges(x)
     plaq = logp / (param.beta * param.volume)
-    #  action = action(x) / (-param.beta * param.volume)
     dqsq = (q - qi) ** 2
 
     if with_force:
@@ -178,6 +176,9 @@ def train_step(
             loss_dkl.backward()
 
     optimizer.step()
+    if scheduler is not None:
+        scheduler.step(loss_dkl)
+
     loss = loss_dkl + loss_force
     #  loss.backward()
     #  optimizer.step()
@@ -212,10 +213,8 @@ def running_averages(
         val = np.array(val)
         if len(val.shape) > 0:
             avgd = val[-n_epochs:].mean()
-            #  avgd = np.mean(val[-n_epochs:])
         else:
             avgd = val.mean()
-            #  avgd = np.mean(val)
 
         avgs[key] = avgd
 
@@ -269,7 +268,7 @@ def train(
         force_factor: float = 0.01,
         dkl_factor: float = 1.,
         history: dict[str, list] = None,
-        weight_decay: float = 1e-5,
+        weight_decay: float = 0.01,
 ):
     """Train the flow model."""
     if model is None:
@@ -277,10 +276,6 @@ def train(
 
     if history is None:
         history = {}
-
-    if torch.cuda.is_available():
-        model['layers'].cuda()
-        model['prior'].cuda()
 
     logdir = io.get_logdir(param, config)
     train_dir = os.path.join(logdir, 'training')
@@ -297,18 +292,20 @@ def train(
 
     u1_action = qed.BatchAction(param.beta)
 
-    optimizer_dkl = optim.AdamW(model['layers'].parameters(),
-                                lr=config.base_lr, weight_decay=weight_decay)
+    optimizer = optim.AdamW(model['layers'].parameters(),
+                            lr=config.base_lr, weight_decay=weight_decay)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+    logger.log(f'Scheduler created!')
 
-    optimizer_force = None
-    if force_factor > 0:
-        lr_force = config.base_lr / 100.0
-        optimizer_force = optim.AdamW(model['layers'].parameters(),
-                                      lr=lr_force, weight_decay=weight_decay)
+    #  optimizer_force = None
+    #  if force_factor > 0:
+    #      lr_force = config.base_lr / 100.0
+    #      optimizer_force = optim.AdamW(model['layers'].parameters(),
+    #                                    lr=lr_force, weight_decay=weight_decay)
 
-    optimizer = optimizer_dkl
-    if config.with_force and force_factor > 0:
-        optimizer = optimizer_force
+    #  optimizer = optimizer_dkl
+    #  if config.with_force and force_factor > 0:
+    #      optimizer = optimizer_force
 
     interactive = logging.in_notebook()
     plots = {}
@@ -324,43 +321,39 @@ def train(
     for era in range(config.n_era):
         t0 = time.time()
         estr = f'ERA={era}, last took: {int(dt // 60)} min {dt%60:.4g} sec'
-        line = len(estr) * '-'
-        logger.log('\n'.join([line, estr, line]))
+        logger.rule(estr)
         for epoch in range(config.n_epoch):
             step += 1
-            metrics = train_step(model, param,
-                                 u1_action,
-                                 optimizer,
-                                 config.batch_size,
-                                 config.with_force,
+            metrics = train_step(model=model,
+                                 param=param,
+                                 action=u1_action,
+                                 optimizer=optimizer,
+                                 batch_size=config.batch_size,
+                                 with_force=config.with_force,
+                                 scheduler=scheduler,
                                  pre_model=pre_model,
                                  dkl_factor=dkl_factor,
                                  force_factor=force_factor)
 
-            if config.with_force:
-                metrics = train_step(model, param,
-                                     u1_action,
-                                     optimizer,
-                                     config.batch_size,
-                                     config.with_force,
-                                     pre_model=pre_model,
-                                     dkl_factor=dkl_factor,
-                                     force_factor=force_factor)
+            #  if config.with_force:
+            #      metrics = train_step(model, param,
+            #                           u1_action,
+            #                           optimizer,
+            #                           config.batch_size,
+            #                           config.with_force,
+            #                           pre_model=pre_model,
+            #                           dkl_factor=dkl_factor,
+            #                           force_factor=force_factor)
 
             step_info = {'epoch': int(epoch+3)}  # , 'step': int(step+2)}
             history = update_history(history, metrics, extras=step_info)
 
             if step % print_freq == 0:
                 window = min(epoch, 5)
-                running_avgs = running_averages(history, n_epochs=window)
-                logger.print_metrics(running_avgs, skip=['q'])
+                #  running_avgs = running_averages(history, n_epochs=window)
+                logger.print_metrics(metrics, skip=['q'])
 
             if step % plot_freq == 0 and interactive:
-                #  step_info = {'epoch': int(epoch+1)}  # , 'step': int(step+2)}
-                #  history = update_history(history, metrics, extras=step_info)
-                #  dq = np.array(history['dq'])
-                #  window = min((epoch, 10))
-
                 #  dq = np.array(history['dq'])[-window:]
                 #  plot_metrics = {
                 #      'dqsq': history['dqsq'],
@@ -370,38 +363,30 @@ def train(
                 #  pavgs = running_averages(plot_metrics,
                 #                           n_epochs=min(epoch, 5))
                 #  dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
-                window = min(epoch, 5)
+                #  window = min(epoch, 5)
                 dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
                 plotter.update_plot(y=dqsq_avg,
                                     ax=plots['dqsq']['ax'],
                                     fig=plots['dqsq']['fig'],
                                     line=plots['dqsq']['line'],
                                     display_id=plots['dqsq']['display_id'])
-                #  ess_avg = history['ess'].mean(axis=-1)
-                plot_data = {
-                    'ess': PlotData(history['ess'],
-                                    plots['dkl']['plot_obj2']),
-                    'loss_dkl': PlotData(history['loss'],
-                                         plots['dkl']['plot_obj1']),
-                }
-                plotter.update_joint_plots(plot_data['loss_dkl'],
-                                           plot_data['ess'],
+
+                epdata = PlotData(history['ess'], plots['dkl']['plot_obj2'])
+                lpdata = PlotData(history['loss'], plots['dkl']['plot_obj1'])
+                plotter.update_joint_plots(lpdata, epdata,
                                            plots['dkl']['display_id'])
 
                 if config.with_force:
-                    plot_data.update({
-                        'ess': PlotData(history['ess'],
-                                        plots['force']['plot_obj2']),
-                        'loss_force': PlotData(history['loss_force'],
-                                               plots['force']['plot_obj1']),
-                    })
-                    plotter.update_joint_plots(plot_data['loss_force'],
-                                               plot_data['ess'],
+                    epdata = PlotData(history['ess'],
+                                      plots['force']['plot_obj2'])
+                    lpdata = PlotData(history['loss_force'],
+                                      plots['force']['plot_obj1'])
+                    plotter.update_joint_plots(lpdata, epdata,
                                                plots['force']['display_id'])
 
         dt = time.time() - t0
-        #  if outdir is not None:
-        ckpt_file = io.save_checkpoint(era=era, epoch=epoch+1,
+        ckpt_file = io.save_checkpoint(era=era,
+                                       epoch=epoch,
                                        model=model['layers'],
                                        outdir=dirs['ckpts'],
                                        history=history,
@@ -409,7 +394,8 @@ def train(
         ckpt_files.append(ckpt_file)
 
 
-    ckpt_file = io.save_checkpoint(era=era, epoch=epoch+1,
+    ckpt_file = io.save_checkpoint(era=config.n_era,
+                                   epoch=config.n_epoch + 1,
                                    model=model['layers'],
                                    history=history,
                                    outdir=dirs['ckpts'],
@@ -431,8 +417,6 @@ def train(
         'model': model,
         'history': history,
         'optimizer': optimizer,
-        #  'optimizer_kdl': ,
-        #  'optimizer_force': optimizer_force,
         'action': u1_action,
     }
 
@@ -443,7 +427,6 @@ def transfer_to_new_lattice(
         L: int,
         layers: nn.ModuleList,
         param_init: Param,
-        #  config: TrainConfig
 ):
     pdict = asdict(param_init)
     pdict['L'] = L
