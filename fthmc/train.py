@@ -82,146 +82,6 @@ def get_observables(param: Param, x: torch.Tensor):
     return qedMetrics(param=param, plaq=plaq, charge=charge)
 
 
-
-def update_history(
-        history: dict[str, list],
-        metrics: dict[str, list],
-        extras: dict = None
-):
-    def _check_add(d, k, v):
-        if isinstance(v, torch.Tensor):
-            v = grab(v)
-        try:
-            d[k].append(v)
-        except KeyError:
-            d[k] = [v]
-
-        return d
-
-    if extras is not None:
-        for key, val in extras.items():
-            history = _check_add(history, key, val)
-    for key, val in metrics.items():
-        history = _check_add(history, key, val)
-
-    return history
-
-
-ActionFn = Callable[[float], torch.Tensor]
-
-def train_step(
-        model: dict[str, nn.Module],
-        param: Param,
-        action: ActionFn,
-        optimizer: optim.Optimizer,
-        batch_size: int,
-        scheduler: Any = None,
-        with_force: bool = False,
-        pre_model: dict[str, nn.Module] = None,
-        force_factor: float = 1.,
-        dkl_factor: float = 1.,
-        scaler: GradScaler = None,
-):
-    """Perform a single training step.
-
-    TODO: Add `torch.device` to arguments for DDP.
-    """
-    t0 = time.time()
-    layers, prior = model['layers'], model['prior']
-    optimizer.zero_grad()
-
-    loss_dkl = torch.tensor(0.0)
-    loss_force = torch.tensor(0.0)
-    if torch.cuda.is_available():
-        loss_dkl = loss_dkl.cuda()
-        loss_force = loss_force.cuda()
-
-    xi = None
-    if pre_model is not None:
-        pre_layers, pre_prior = pre_model['layers'], pre_model['prior']
-        pre_xi = pre_prior.sample_n(batch_size)
-        x = qed.ft_flow(pre_layers, pre_xi)
-        xi = qed.ft_flow_inv(layers, x)
-
-    x, xi, logq = apply_flow_to_prior(prior, layers, xi=xi,
-                                      batch_size=batch_size)
-    logp = (-1.) * action(x)
-    dkl = calc_dkl(logp, logq)
-
-    ess = calc_ess(logp, logq)
-    qi = qed.batch_charges(xi)
-    q = qed.batch_charges(x)
-    plaq = logp / (param.beta * param.volume)
-    dqsq = (q - qi) ** 2
-
-    if with_force:
-        assert pre_model is not None
-        force = qed.ft_force(param, layers, xi, True)
-        force_norm = torch.linalg.norm(force)
-        force_size = torch.sum(torch.square(force))
-        loss_force = force_factor * force_size
-        if scaler is not None:
-            scaler.scale(loss_force).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss_force.backward()
-    else:
-        loss_dkl = dkl_factor * dkl
-        if scaler is not None:
-            scaler.scale(loss_dkl).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss_dkl.backward()
-
-    optimizer.step()
-    if scheduler is not None:
-        scheduler.step(loss_dkl)
-
-    loss = loss_dkl + loss_force
-    #  loss.backward()
-    #  optimizer.step()
-
-    batch_metrics = {
-        'dt': time.time() - t0,
-        'loss': grab(loss),
-        'ess': grab(ess),
-        'logp': grab(logp),
-        'logq': grab(logq),
-        'q': grab(q),
-        'dqsq': grab(dqsq),
-        'plaq': grab(plaq),
-        #  'loss_dkl': grab(loss_dkl),
-    }
-    if with_force:
-        batch_metrics.update({
-            #  'loss_force': force_factor * grab(loss_force),
-            'force_size': grab(force_size),
-            'force_norm': grab(force_norm),
-        })
-
-    return batch_metrics
-
-
-def running_averages(
-    history: dict[str, np.ndarray],
-    n_epochs: int = 10,
-):
-    avgs = {}
-    for key, val in history.items():
-        val = np.array(val)
-        if len(val.shape) > 0:
-            avgd = val[-n_epochs:].mean()
-        else:
-            avgd = val.mean()
-
-        avgs[key] = avgd
-
-    return avgs
-
-
-
 def get_model(param: Param, config: TrainConfig):
     lattice_shape = tuple(param.lat)
     link_shape = (2, *param.lat)
@@ -257,6 +117,155 @@ def restore_model_from_checkpoint(
     return {'model': model, 'optimizer': optimizer}
 
 
+
+def update_history(
+        history: dict[str, list],
+        metrics: dict[str, list],
+        extras: dict = None
+):
+    def _check_add(d, k, v):
+        if isinstance(v, torch.Tensor):
+            v = grab(v)
+        try:
+            d[k].append(v)
+        except KeyError:
+            d[k] = [v]
+
+        return d
+
+    if extras is not None:
+        for key, val in extras.items():
+            history = _check_add(history, key, val)
+    for key, val in metrics.items():
+        history = _check_add(history, key, val)
+
+    return history
+
+
+def running_averages(
+    history: dict[str, Union[list, np.ndarray]],
+    n_epochs: int = 10,
+    rename: bool = True,
+):
+    avgs = {}
+    for key, val in history.items():
+        val = np.array(val)
+        if len(val.shape) > 0:
+            avgd = val[-n_epochs:].mean()
+        else:
+            avgd = val.mean()
+
+        if rename:
+            key = f'{key}_avg'
+
+        avgs[key] = avgd
+
+
+    return avgs
+
+
+
+
+"""
+    #  loss = loss_dkl + loss_force
+    #  loss.backward()
+    #  optimizer.step()
+    #  if with_force:
+    #      loss_force = torch.tensor(0.0)
+    #      if torch.cuda.is_available():
+    #          loss_force = loss_force.cuda()
+    #      assert pre_model is not None
+    #      force = qed.ft_force(param, layers, xi, True)
+    #      force_norm = torch.linalg.norm(force)
+    #      force_size = torch.sum(torch.square(force))
+    #      loss_force = force_factor * force_size
+    #      if scaler is not None:
+    #          scaler.scale(loss_force).backward()
+    #          scaler.step(optimizer)
+    #          scaler.update()
+    #      else:
+    #          loss_force.backward()
+    #      batch_metrics.update({
+    #          #  'loss_force': force_factor * grab(loss_force),
+    #          'force_size': grab(force_size),
+    #          'force_norm': grab(force_norm),
+    #      })
+    #  else:
+"""
+
+
+ActionFn = Callable[[float], torch.Tensor]
+
+def train_step(
+        model: dict[str, nn.Module],
+        param: Param,
+        action: ActionFn,
+        optimizer: optim.Optimizer,
+        batch_size: int,
+        scheduler: Any = None,
+        with_force: bool = False,
+        pre_model: dict[str, nn.Module] = None,
+        force_factor: float = 1.,
+        dkl_factor: float = 1.,
+        scaler: GradScaler = None,
+):
+    """Perform a single training step.
+
+    TODO: Add `torch.device` to arguments for DDP.
+    """
+    t0 = time.time()
+    #  layers, prior = model['layers'], model['prior']
+    optimizer.zero_grad()
+
+    loss_dkl = torch.tensor(0.0)
+    if torch.cuda.is_available():
+        loss_dkl = loss_dkl.cuda()
+
+    xi = None
+    if pre_model is not None:
+        #  pre_layers, pre_prior = pre_model['layers'], pre_model['prior']
+        pre_xi = pre_model['prior'].sample_n(batch_size)
+        x = qed.ft_flow(pre_model['layers'], pre_xi)
+        xi = qed.ft_flow_inv(pre_xi, x)
+
+    x, xi, logq = apply_flow_to_prior(model['prior'],
+                                      model['layers'], xi=xi,
+                                      batch_size=batch_size)
+    logp = (-1.) * action(x)
+    dkl = calc_dkl(logp, logq)
+
+    ess = calc_ess(logp, logq)
+    qi = qed.batch_charges(xi)
+    q = qed.batch_charges(x)
+    plaq = logp / (param.beta * param.volume)
+    dqsq = (q - qi) ** 2
+
+    loss_dkl = dkl_factor * dkl
+    if scaler is not None:
+        scaler.scale(loss_dkl).backward()
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        loss_dkl.backward()
+
+    optimizer.step()
+    if scheduler is not None:
+        scheduler.step(loss_dkl)
+
+    batch_metrics = {
+        'dt': time.time() - t0,
+        'ess': grab(ess),
+        'loss_dkl': grab(loss_dkl),
+        'logp': grab(logp),
+        'logq': grab(logq),
+        'q': grab(q),
+        'dqsq': grab(dqsq),
+        'plaq': grab(plaq),
+    }
+
+
+    return batch_metrics
+
 PlotData = plotter.LivePlotData
 
 def train(
@@ -268,14 +277,20 @@ def train(
         force_factor: float = 0.01,
         dkl_factor: float = 1.,
         history: dict[str, list] = None,
-        weight_decay: float = 0.01,
+        weight_decay: float = 0.,
+        device: str = None,
 ):
     """Train the flow model."""
+    if history is None:
+        history = {}
+
     if model is None:
         model = get_model(param, config)
 
-    if history is None:
-        history = {}
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    model['layers'].to(device)
 
     logdir = io.get_logdir(param, config)
     train_dir = os.path.join(logdir, 'training')
@@ -294,8 +309,9 @@ def train(
 
     optimizer = optim.AdamW(model['layers'].parameters(),
                             lr=config.base_lr, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
-    logger.log(f'Scheduler created!')
+    scheduler = None
+    #  scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+    #  logger.log(f'Scheduler created!')
 
     #  optimizer_force = None
     #  if force_factor > 0:
@@ -318,6 +334,7 @@ def train(
     print_freq = min((config.print_freq, config.n_epoch))
     plot_freq = min((config.plot_freq, config.n_epoch))
     ckpt_files = []
+    skip = ['q']
     for era in range(config.n_era):
         t0 = time.time()
         estr = f'ERA={era}, last took: {int(dt // 60)} min {dt%60:.4g} sec'
@@ -346,14 +363,41 @@ def train(
             #                           force_factor=force_factor)
 
             step_info = {'epoch': int(epoch+3)}  # , 'step': int(step+2)}
-            history = update_history(history, metrics, extras=step_info)
+            #  history = update_history(history, metrics, extras=step_info)
+            for k, v in metrics.items():
+                if k in skip:
+                    continue
+                try:
+                    history[k].append(v)
+                except KeyError:
+                    history[k] = [v]
 
+            skip = ['q']
+            pre = [f'epoch: {epoch}']
+            win = min(epoch, 20)
             if step % print_freq == 0:
-                window = min(epoch, 5)
-                #  running_avgs = running_averages(history, n_epochs=window)
-                logger.print_metrics(metrics, skip=['q'])
+                #  running_avgs = running_averages(history, win, False)
+                logger.print_metrics(metrics, pre=pre, skip=['q'])
+                logger.print_metrics(history,
+                                     skip=skip,
+                                     window=win,
+                                     pre=['(avg)', *pre])
 
             if step % plot_freq == 0 and interactive:
+                dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
+                plotter.update_plot(y=dqsq_avg,
+                                    ax=plots['dqsq']['ax'],
+                                    fig=plots['dqsq']['fig'],
+                                    line=plots['dqsq']['line'],
+                                    display_id=plots['dqsq']['display_id'])
+
+                epdata = PlotData(history['ess'],
+                                  plots['dkl']['plot_obj2'])
+                lpdata = PlotData(history['loss_dkl'],
+                                  plots['dkl']['plot_obj1'])
+
+                plotter.update_joint_plots(lpdata, epdata,
+                                           plots['dkl']['display_id'])
                 #  dq = np.array(history['dq'])[-window:]
                 #  plot_metrics = {
                 #      'dqsq': history['dqsq'],
@@ -364,25 +408,14 @@ def train(
                 #                           n_epochs=min(epoch, 5))
                 #  dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
                 #  window = min(epoch, 5)
-                dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
-                plotter.update_plot(y=dqsq_avg,
-                                    ax=plots['dqsq']['ax'],
-                                    fig=plots['dqsq']['fig'],
-                                    line=plots['dqsq']['line'],
-                                    display_id=plots['dqsq']['display_id'])
 
-                epdata = PlotData(history['ess'], plots['dkl']['plot_obj2'])
-                lpdata = PlotData(history['loss'], plots['dkl']['plot_obj1'])
-                plotter.update_joint_plots(lpdata, epdata,
-                                           plots['dkl']['display_id'])
-
-                if config.with_force:
-                    epdata = PlotData(history['ess'],
-                                      plots['force']['plot_obj2'])
-                    lpdata = PlotData(history['loss_force'],
-                                      plots['force']['plot_obj1'])
-                    plotter.update_joint_plots(lpdata, epdata,
-                                               plots['force']['display_id'])
+                #  if config.with_force:
+                #      epdata = PlotData(history['ess'],
+                #                        plots['force']['plot_obj2'])
+                #      lpdata = PlotData(history['loss_force'],
+                #                        plots['force']['plot_obj1'])
+                #      plotter.update_joint_plots(lpdata, epdata,
+                #                                 plots['force']['display_id'])
 
         dt = time.time() - t0
         ckpt_file = io.save_checkpoint(era=era,
