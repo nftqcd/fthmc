@@ -34,7 +34,13 @@ def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
 
 
-def apply_flow_to_prior(prior, coupling_layers, *, batch_size, xi=None):
+def apply_flow_to_prior(
+        prior: nn.Module,
+        coupling_layers: list[nn.Module],
+        *,
+        batch_size: int,
+        xi: torch.Tensor = None
+):
     if xi is None:
         xi = prior.sample_n(batch_size)
 

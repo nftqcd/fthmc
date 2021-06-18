@@ -93,30 +93,28 @@ class Console:
 
 class Logger:
     """Logger class for pretty printing metrics during training/testing."""
-    def __init__(self, width=None, theme: dict[str, str] = None):
+    def __init__(self, theme: dict = None):
         try:
             # pylint:disable=import-outside-toplevel
             from rich.console import Console as RichConsole
             from rich.theme import Theme
-            theme = None
-            if in_notebook():
-                if theme is None:
+            if theme is None:
+                if in_notebook():
                     theme = {
                         'repr.number': 'bold #87ff00',
                         'repr.attrib_name': 'bold #ff5fff',
                         'repr.str': 'italic #FFFF00',
                     }
 
-                theme = Theme(theme)
 
             console = RichConsole(record=False, log_path=False,
                                   force_jupyter=in_notebook(),
                                   log_time_format='[%X] ',
-                                  theme=theme)#, width=width)
+                                  theme=Theme(theme))#, width=width)
+
         except (ImportError, ModuleNotFoundError):
             console = Console()
 
-        self.width = width
         self.console = console
 
     def rule(self, s: str, *args, **kwargs):
@@ -135,9 +133,9 @@ class Logger:
         self,
         metrics: dict,
         window: int = 0,
-        pre: list = None,
         outfile: str = None,
         skip: list[str] = None,
+        pre: Union[str, list, tuple] = None,
     ):
         """Print nicely formatted string of summary of items in `metrics`."""
         if skip is None:
@@ -148,7 +146,7 @@ class Logger:
             if k not in skip
         ]
         if pre is not None:
-            fstrs = [*pre, fstrs]
+            fstrs = [pre, *fstrs] if isinstance(pre, str) else [*pre] + fstrs
 
         outstr = ' '.join(fstrs)
         self.log(outstr)

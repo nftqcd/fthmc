@@ -367,4 +367,5 @@ def make_u1_equiv_layers(
             lattice_shape=lattice_shape, mask_mu=mu, mask_off=off,
             plaq_coupling=plaq_coupling)
         layers.append(link_coupling)
+
     return nn.ModuleList(layers)
