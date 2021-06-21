@@ -276,9 +276,12 @@ def train(
 
     optimizer = optim.AdamW(model['layers'].parameters(),
                             lr=config.base_lr, weight_decay=weight_decay)
-    scheduler = None
-    #  scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
-    #  logger.log(f'Scheduler created!')
+    #  scheduler = None
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.98,
+                                                     mode='min', #patience=500,
+                                                     min_lr=1e-5, verbose=True)
+
+    logger.log(f'Scheduler created!')
 
     #  optimizer_force = None
     #  if force_factor > 0:
@@ -313,11 +316,11 @@ def train(
                                  action=u1_action,
                                  optimizer=optimizer,
                                  batch_size=config.batch_size,
-                                 with_force=config.with_force,
+                                 #  with_force=config.with_force,
                                  scheduler=scheduler,
                                  pre_model=pre_model,
-                                 dkl_factor=dkl_factor,
-                                 force_factor=force_factor)
+                                 dkl_factor=dkl_factor)
+                                 #  force_factor=force_factor)
 
             #  if config.with_force:
             #      metrics = train_step(model, param,
@@ -344,7 +347,10 @@ def train(
             win = min(epoch, 20)
             if step % print_freq == 0:
                 #  running_avgs = running_averages(history, win, False)
-                logger.print_metrics(metrics, pre=pre, skip=['q'])
+                logger.print_metrics(metrics,
+                                      skip=skip,
+                                      pre=['(now)', *pre])
+
                 logger.print_metrics(history,
                                      skip=skip,
                                      window=win,

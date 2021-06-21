@@ -34,8 +34,21 @@ def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
 
 
+class BasePrior(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
+
+    def sample_n(self, n: int)  -> torch.Tensor:
+        raise NotImplementedError
+
+
+
+
 def apply_flow_to_prior(
-        prior: nn.Module,
+        prior: BasePrior,
         coupling_layers: list[nn.Module],
         *,
         batch_size: int,
