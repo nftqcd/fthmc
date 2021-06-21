@@ -59,7 +59,7 @@ def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
 
 
-def list_to_tensor(x: list):
+def list_to_tensor(x: list[torch.Tensor]):
     return torch.tensor([grab(torch.stack(i)) for i in x])
 
 
@@ -83,12 +83,9 @@ def get_observables(param: Param, x: torch.Tensor):
 
 
 def get_model(param: Param, config: TrainConfig):
-    lattice_shape = tuple(param.lat)
-    link_shape = (2, *param.lat)
-
     prior = MultivariateUniform(torch.zeros((2, *param.lat)),
                                 TWO_PI * torch.ones(tuple(param.lat)))
-    layers = make_u1_equiv_layers(lattice_shape=lattice_shape,
+    layers = make_u1_equiv_layers(lattice_shape=tuple(param.lat),
                                   n_layers=config.n_layers,
                                   n_mixture_comps=config.n_s_nets,
                                   hidden_sizes=config.hidden_sizes,
@@ -164,48 +161,18 @@ def running_averages(
     return avgs
 
 
-
-
-"""
-    #  loss = loss_dkl + loss_force
-    #  loss.backward()
-    #  optimizer.step()
-    #  if with_force:
-    #      loss_force = torch.tensor(0.0)
-    #      if torch.cuda.is_available():
-    #          loss_force = loss_force.cuda()
-    #      assert pre_model is not None
-    #      force = qed.ft_force(param, layers, xi, True)
-    #      force_norm = torch.linalg.norm(force)
-    #      force_size = torch.sum(torch.square(force))
-    #      loss_force = force_factor * force_size
-    #      if scaler is not None:
-    #          scaler.scale(loss_force).backward()
-    #          scaler.step(optimizer)
-    #          scaler.update()
-    #      else:
-    #          loss_force.backward()
-    #      batch_metrics.update({
-    #          #  'loss_force': force_factor * grab(loss_force),
-    #          'force_size': grab(force_size),
-    #          'force_norm': grab(force_norm),
-    #      })
-    #  else:
-"""
-
-
 ActionFn = Callable[[float], torch.Tensor]
+Model = dict[str, Union[nn.Module, nn.ModuleList]]
+
 
 def train_step(
-        model: dict[str, nn.Module],
+        model: Model,
         param: Param,
         action: ActionFn,
         optimizer: optim.Optimizer,
         batch_size: int,
         scheduler: Any = None,
-        with_force: bool = False,
         pre_model: dict[str, nn.Module] = None,
-        force_factor: float = 1.,
         dkl_factor: float = 1.,
         scaler: GradScaler = None,
 ):
@@ -229,8 +196,8 @@ def train_step(
         xi = qed.ft_flow_inv(pre_xi, x)
 
     x, xi, logq = apply_flow_to_prior(model['prior'],
-                                      model['layers'], xi=xi,
-                                      batch_size=batch_size)
+                                      nn.ModuleList(model['layers']),
+                                      xi=xi, batch_size=batch_size)
     logp = (-1.) * action(x)
     dkl = calc_dkl(logp, logq)
 

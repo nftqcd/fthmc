@@ -17,9 +17,7 @@ from fthmc.utils.logger import in_notebook
 MPL_BACKEND = os.environ.get('MPLBACKEND', None)
 EXT = ('png' if MPL_BACKEND == 'module://itermplot' else 'pdf')
 
-
 logger = io.Logger()
-
 
 PathLike = Union[str, Path]
 Metric = Union[list, np.ndarray, torch.Tensor]
