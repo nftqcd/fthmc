@@ -93,9 +93,12 @@ def generate_ensemble(
     }
 
 def serial_sample_generator(model, action_fn, batch_size, num_samples):
-    layers = model['layers']
-    prior = model['prior']
+    #  layers = model['layers']
+    #  prior = model['prior']
+    prior = model.prior
+    layers = model.layers
     layers.eval()
+    #  model.layers.eval()
     x, q, logq, logp = None, None, None, None
     for i in range(num_samples):
         batch_i = i % batch_size

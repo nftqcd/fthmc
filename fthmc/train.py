@@ -26,7 +26,7 @@ from fthmc.config import Param, TrainConfig
 from fthmc.utils.distributions import MultivariateUniform, calc_dkl, calc_ess
 from fthmc.utils.layers import (get_nets, make_net_from_layers,
                                 make_u1_equiv_layers, set_weights)
-from fthmc.utils.samplers import apply_flow_to_prior
+from fthmc.utils.samplers import BasePrior, apply_flow_to_prior
 
 logger = logging.Logger()
 TWO_PI = 2 * PI
@@ -49,6 +49,19 @@ class qedMetrics:
             'plaq': self.plaq,
             'charge': self.charge
         }
+
+
+@dataclass
+class FlowModel:
+    prior: BasePrior
+    layers: nn.ModuleList
+
+#  class FlowModel(nn.Module):
+#      def __init__(self, prior: BasePrior, layers: nn.ModuleList):
+#          super().__init__()
+#          self.prior = prior
+#          self.layers = layers
+
 
 
 def grab(x: torch.Tensor):
@@ -92,7 +105,8 @@ def get_model(param: Param, config: TrainConfig):
                                   kernel_size=config.kernel_size)
     set_weights(layers)
 
-    return {'layers': layers, 'prior': prior}
+    #  return {'layers': layers, 'prior': prior}
+    return FlowModel(prior=prior, layers=layers)
 
 
 def restore_model_from_checkpoint(
@@ -104,12 +118,12 @@ def restore_model_from_checkpoint(
     checkpoint = torch.load(infile)
     model = get_model(param, train_config)
     optimizer = optim.AdamW(
-        model['layers'].parameters(),
+        model.layers.parameters(),
         lr=train_config.base_lr,
         weight_decay=1e-5,
     )
 
-    model['layers'].load_state_dict(checkpoint['model_state_dict'])
+    model.layers.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     return {'model': model, 'optimizer': optimizer}
 
@@ -162,19 +176,22 @@ def running_averages(
 
 
 ActionFn = Callable[[float], torch.Tensor]
-Model = dict[str, Union[nn.Module, nn.ModuleList]]
+#  Model = dict[str, Union[nn.Module, nn.ModuleList]]
 
+
+  #  dict[str, nn.Module] = None,
 
 def train_step(
-        model: Model,
+        model: FlowModel,
         param: Param,
         action: ActionFn,
         optimizer: optim.Optimizer,
         batch_size: int,
         scheduler: Any = None,
-        pre_model: dict[str, nn.Module] = None,
+        pre_model: FlowModel = None,
         dkl_factor: float = 1.,
         scaler: GradScaler = None,
+        xi: torch.Tensor = None,
 ):
     """Perform a single training step.
 
@@ -188,15 +205,16 @@ def train_step(
     if torch.cuda.is_available():
         loss_dkl = loss_dkl.cuda()
 
-    xi = None
     if pre_model is not None:
         #  pre_layers, pre_prior = pre_model['layers'], pre_model['prior']
-        pre_xi = pre_model['prior'].sample_n(batch_size)
-        x = qed.ft_flow(pre_model['layers'], pre_xi)
+        #  pre_xi = pre_model['prior'].sample_n(batch_size)
+        pre_xi = pre_model.prior.sample_n(batch_size)
+        x = qed.ft_flow(pre_model.layers, pre_xi)
         xi = qed.ft_flow_inv(pre_xi, x)
 
-    x, xi, logq = apply_flow_to_prior(model['prior'],
-                                      nn.ModuleList(model['layers']),
+    x, xi, logq = apply_flow_to_prior(model.prior,
+                                      model.layers,
+                                      #  nn.ModuleList(model['layers']),
                                       xi=xi, batch_size=batch_size)
     logp = (-1.) * action(x)
     dkl = calc_dkl(logp, logq)
@@ -235,17 +253,31 @@ def train_step(
 
 PlotData = plotter.LivePlotData
 
+@dataclass
+class SchedulerConfig:
+    factor: float
+    mode: str = 'min'
+    patience: int = 10
+    threshold: float = 1e-4
+    threshold_mode: str = 'rel'
+    cooldown: int = 0
+    min_lr: float = 1e-5
+    verbose: bool = True
+
+
 def train(
         param: Param,
         config: TrainConfig,
-        model: dict[str, nn.Module] = None,
-        pre_model: dict[str, nn.Module] = None,
+        model: FlowModel = None,  # dict[str, nn.Module] = None,
+        pre_model: FlowModel = None,  # dict[str, nn.Module] = None,
         figsize: tuple = (5, 2),
-        force_factor: float = 0.01,
+        #  force_factor: float = 0.01,
         dkl_factor: float = 1.,
         history: dict[str, list] = None,
         weight_decay: float = 0.,
+        scheduler_config: SchedulerConfig = None,
         device: str = None,
+        xi: torch.Tensor = None,
 ):
     """Train the flow model."""
     if history is None:
@@ -257,7 +289,10 @@ def train(
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    model['layers'].to(device)
+    model.prior.to(device)
+    model.layers.to(device)
+    #  model['prior'].to(device)
+    #  model['layers'].to(device)
 
     logdir = io.get_logdir(param, config)
     train_dir = os.path.join(logdir, 'training')
@@ -274,12 +309,16 @@ def train(
 
     u1_action = qed.BatchAction(param.beta)
 
-    optimizer = optim.AdamW(model['layers'].parameters(),
+    optimizer = optim.AdamW(model.layers.parameters(),
                             lr=config.base_lr, weight_decay=weight_decay)
     #  scheduler = None
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.98,
-                                                     mode='min', #patience=500,
-                                                     min_lr=1e-5, verbose=True)
+    scheduler = None
+    if scheduler_config is not None:
+        schcfg = asdict(scheduler_config)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, **schcfg)
+                                                     #  factor=0.98,
+                                                     #  mode='min', #patience=500,
+                                                     #  min_lr=1e-5, verbose=True)
 
     logger.log(f'Scheduler created!')
 
@@ -313,6 +352,7 @@ def train(
             step += 1
             metrics = train_step(model=model,
                                  param=param,
+                                 xi=xi,
                                  action=u1_action,
                                  optimizer=optimizer,
                                  batch_size=config.batch_size,
@@ -393,7 +433,7 @@ def train(
         dt = time.time() - t0
         ckpt_file = io.save_checkpoint(era=era,
                                        epoch=epoch,
-                                       model=model['layers'],
+                                       model=model.layers,  # model['layers'],
                                        outdir=dirs['ckpts'],
                                        history=history,
                                        optimizer=optimizer)
@@ -402,7 +442,7 @@ def train(
 
     ckpt_file = io.save_checkpoint(era=config.n_era,
                                    epoch=config.n_epoch + 1,
-                                   model=model['layers'],
+                                   model=model.layers,  # model['layers'],
                                    history=history,
                                    outdir=dirs['ckpts'],
                                    optimizer=optimizer)
@@ -442,6 +482,7 @@ def transfer_to_new_lattice(
 
     prior = MultivariateUniform(torch.zeros((2, *param.lat)),
                                 TWO_PI * torch.ones(tuple(param.lat)))
-    model = {'layers': flow, 'prior': prior}
+    model = FlowModel(prior=prior, layers=flow)
+    #  {'layers': flow, 'prior': prior}
 
     return {'param': param, 'model': model}
