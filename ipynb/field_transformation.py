@@ -92,7 +92,7 @@ def make_conv_net(*, hidden_sizes, kernel_size, in_channels, out_channels, use_f
             sizes[i], sizes[i+1], kernel_size, padding=padding_size,
             stride=1, padding_mode='circular'))
         if i != len(sizes) - 2:
-            net.append(torch.nn.SiLU())
+            net.append(torch.nn.SiLU()) # ADJUST ME
         else:
             if use_final_tanh:
                 net.append(torch.nn.Tanh())
