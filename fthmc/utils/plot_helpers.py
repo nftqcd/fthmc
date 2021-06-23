@@ -239,15 +239,18 @@ def init_plots(
         #                              ylabel='dqsq', xlabel='Epoch')
 
         ylabel_dkl = ['loss_dkl', 'ESS']
-        plots_dkl = init_live_joint_plots(config.n_era,
-                                          config.n_epoch, figsize=figsize,
-                                          param=param, colors=colors_rb,
-                                          config=config, ylabel=ylabel_dkl)
+        plots_dkl = init_live_joint_plots(
+            config.n_era, config.n_epoch,
+            figsize=figsize, use_title=True,
+            param=param, config=config,
+            colors=colors_rb, ylabel=ylabel_dkl
+        )
         ylabel_ess = ['dqsq', 'ess']
-        plots_ess = init_live_joint_plots(config.n_era, config.n_epoch,
-                                          figsize=figsize,
-                                          colors=colors_gp, param=param,
-                                          config=config, ylabel=ylabel_ess)
+        plots_ess = init_live_joint_plots(
+            config.n_era, config.n_epoch,
+            figsize=figsize, colors=colors_gp,
+            param=param, config=config, ylabel=ylabel_ess
+        )
 
         #  if config.with_force:
         #      ylabel_force = ['loss_force', 'ESS']
@@ -380,9 +383,14 @@ def moving_average(x: np.ndarray, window: int = 10):
     #  if len(x) < window:
     if len(x.shape) > 0 and x.shape[0] < window:
         return np.mean(x, keepdims=True)
+    #  if len(x.shape) > 0:
+    #      avgd = x[-window:].mean(-1)
+    #  else:
+    #      avgd = x.mean(-1)
     #  if x.shape[0] < window:
     #      return np.mean(x, keepdims=True)
 
+    #  return avgd
     return np.convolve(x, np.ones(window), 'valid') / window
 
 
@@ -410,11 +418,23 @@ def update_plot(
     else:
         y = np.array(y)
 
-    if window > 0:
-        y = moving_average(np.array(y).squeeze(), window=window)
+    #  if window > 0 and y.shape[0] > 1:
+    #  if window > 0 and len(y.shape) > 0:
+    #      if len(y.shape) == 2:
+    #          y = y[-window:].mean(-1)
+    #      else:
+    #          y = y[-window:]
+    #      #  y = moving_average(np.array(y).squeeze(), window=window)
+    avgd = y[-window:]
+    if window > 0 and len(y.shape) > 0:
+        if y.shape[0] < window:
+            window = min((y.shape[0], -1, 1))
 
-    line[0].set_ydata(y)
-    line[0].set_xdata(np.arange(y.shape[0]))
+        avgd = y[-window:].mean(-1)
+
+    line[0].set_ydata(avgd)
+    #  line[0].set_xdata(np.arange(y.shape[0]))
+    line[0].set_xdata(np.arange(avgd.shape[0]))
     #  line[0].set_xdata(np.arange(len(yavg)))
     ax.relim()
     ax.autoscale_view()

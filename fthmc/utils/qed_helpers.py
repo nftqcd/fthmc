@@ -22,8 +22,12 @@ import torch.nn as nn
 
 from typing import List
 from fthmc.config import Param
+from fthmc.utils.logger import Logger
+
 
 TWO_PI = 2 * PI
+
+logger = Logger()
 
 
 def grab(var):
@@ -263,7 +267,7 @@ def leapfrog(param, x, p, verbose=True):
     if verbose:
         plaq = action(param, x) / (-param.beta * param.volume)
         force_norm = torch.linalg.norm(f)
-        print(f'plaq(x): {plaq}, force_norm: {force_norm}')
+        logger.log(f'plaq(x): {plaq}, force_norm: {force_norm}')
 
     for _ in range(param.nstep - 1):
         x_ = x_ + dt * p_
@@ -274,13 +278,14 @@ def leapfrog(param, x, p, verbose=True):
 
 
 def hmc(param, x, verbose=True):
-    p = torch.randn_like(x)
-    act0 = action(param, x) + 0.5 * torch.sum(p * p)
-    x_, p_ = leapfrog(param, x, p, verbose=verbose)
+    nb = x.shape[0]
+    v = torch.randn_like(x)
+    h0 = action(param, x) + 0.5 * torch.sum(v * v)
+    x_, v_ = leapfrog(param, x, v, verbose=verbose)
     xr = regularize(x_)
-    act = action(param, xr) + 0.5 * torch.sum(p_ * p_)
+    act = action(param, xr) + 0.5 * torch.sum(v_ * v_)
     prob = torch.rand([], dtype=torch.float64)
-    dH = act - act0
+    dH = act - h0
     exp_mdH = torch.exp(-dH)
     acc = prob < exp_mdH
     newx = xr if acc else x
