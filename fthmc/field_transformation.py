@@ -25,6 +25,7 @@ def grab(x: torch.Tensor):
         return x.detach().cpu().numpy()
     return float(x)
 
+
 Flow = Union[nn.ModuleList, list[nn.Module]]
 
 class FieldTransformation(nn.Module):
@@ -43,17 +44,11 @@ class FieldTransformation(nn.Module):
         self._charges_fn = lambda x: qed.batch_charges(x)
 
     def action(self, x: torch.Tensor):
-        #y = x
-
-        #logdet = 0.
-        #for layer in self.flow:
-        #    y, logdet_ = layer(y)
-        #    logdet = logdet + logdet_
-        #
-        #return self._action_fn(y) - logdet
         z, logdet = self.flow_forward(x)
+        s = self._action_fn(z) - logdet
 
-        return self._action_fn(z) - logdet
+        #  return self._action_fn(z) - logdet
+        return s.detach()
 
     def flow_forward(self, x: torch.Tensor):
         logdet = 0.
@@ -66,28 +61,51 @@ class FieldTransformation(nn.Module):
     def flow_backward(self, x: torch.Tensor):
         logdet = 0.
         #  for layer in self.flow[::-1]:
-        for layer in [self.flow][::-1]:
+        #  for layer in [self.flow][::-1]:
+        for layer in reversed(self.flow):
             x, logdet_ = layer.reverse(x)
             logdet = logdet - logdet_
 
         return x, logdet
 
     def force(self, x: torch.Tensor, create_graph: bool = False):
+        #  s = torch.tensor(0., requires_grad=True)
         x.requires_grad_(True)
-        s = self.action(x)
-        dsdx, = torch.autograd.grad(s.sum(), x, create_graph=create_graph)
+        s = 0.
+        logdet = 0.
+        for layer in self.flow:
+            x, logdet_ = layer(x)
+            logdet = logdet + logdet_
+
+        #  z, logdet = self.flow_forward(x)
+        s = self._action_fn(x) - logdet
+        #  s = self.action(x)
+        dsdx, = torch.autograd.grad(s, x, create_graph=create_graph,
+                                    grad_outputs=torch.ones(x.shape[0]))
+        #  x.requires_grad_(False)
+        x.detach_()
+        #  dsdx, = torch.autograd.grad(s.sum(), x, create_graph=create_graph)
         #  x.requires_grad_(False)
 
         return dsdx
 
     @staticmethod
     def wrap(x: torch.Tensor):
+        mod = lambda x: torch.remainder(x, TWO_PI)
+        return mod(x + PI) - PI
+
+    def wrap1(x: torch.Tensor):
         x = (x - PI) / TWO_PI
 
         return TWO_PI * (x - x.floor() - 0.5)
 
     def calc_energy(self, x: torch.Tensor, v: torch.Tensor):
+        if len(x.shape) == 3:
+            # [Nd, Nt, Nx]
+            x = x[None, :]
+
         nb = x.shape[0]
+
         return self.action(x) + 0.5 * (v * v).reshape(nb, -1).sum(-1)
 
     def leapfrog(self, x: torch.Tensor, v: torch.Tensor):
@@ -101,33 +119,7 @@ class FieldTransformation(nn.Module):
             v = v + (-dt) * self.force(x)
 
         x = x + 0.5 * dt * v
-        return x, v
-
-    def build_trajectory(self, x: torch.Tensor = None):
-        if x is None:
-            x = self.param.initializer()[None, :]
-
-        #x0 = x.clone()
-        x0 = x.clone()
-        nb = x.shape[0]
-        v = torch.randn_like(x)
-        h0 = self.calc_energy(x, v)
-
-        x, v = self.leapfrog(x, v)
-        x = self.wrap(x)
-
-        h1 = self.calc_energy(x, v)
-
-        dh = h1 - h0
-        exp_mdh = torch.exp(-dh)
-        acc = (torch.rand_like(exp_mdh) < exp_mdh).float()
-
-        x_ = x.reshape(nb, -1)
-        x_ = x.reshape(nb, -1)
-        x_ = acc * x + (1 - acc) * x0
-
-        xout, _  = self.flow_forward(x_)
-        return self.wrap(xout), acc, dh, exp_mdh
+        return x.detach(), v
 
     def forward1(self, x: torch.Tensor):
         v0 = torch.randn_like(x)
@@ -158,6 +150,28 @@ class FieldTransformation(nn.Module):
         acc = torch.rand(prob.shape) < prob
         pass
 
+    def build_trajectory(self, x: torch.Tensor = None):
+        if x is None:
+            x = self.param.initializer()
+
+        #x0 = x.clone()
+        x0 = x.clone()
+        nb = x.shape[0]
+        v = torch.randn_like(x)
+        h0 = self.calc_energy(x, v)
+
+        x, v = self.leapfrog(x, v)
+        x = self.wrap(x)
+
+        h1 = self.calc_energy(x, v)
+
+        dh = h1 - h0
+        exp_mdh = torch.exp(-dh)
+        acc = (torch.rand_like(exp_mdh) < exp_mdh)
+        x_ = torch.cat([x[acc], x0[torch.logical_not(acc)]])
+
+        return x_, acc, dh, exp_mdh
+
 
     def run(
             self,
@@ -170,7 +184,9 @@ class FieldTransformation(nn.Module):
     ):
         if x is None:
             x = self.param.initializer()
+            x = x[None, :]
 
+        nb = x.shape[0]
         runs_history = {}
         beta = self.param.beta
         volume = self.param.volume
@@ -201,65 +217,103 @@ class FieldTransformation(nn.Module):
             t0 = time.time()
             xarr = []
             history = {}
-            qarr = torch.zeros((self.param.ntraj, x.shape[0]))
-            for i in range(self.param.ntraj):
+            qarr = torch.zeros((self.param.ntraj, x.shape[0]),
+                               requires_grad=False)
+            if x is None:
+                x = self.param.initializer()[None, :]
+
+            p = (-1.) * self.action(x) / (beta * volume)
+            q = qed.batch_charges(x)
+            logger.print_metrics({'plaq': p, 'q': q})
+            xarr = []
+            #  zeros = torch.zeros((self.param.ntraj, nb), requires_grad=False)
+            #  ones = torch.ones((self.param.ntraj, nb), requires_grad=False)
+            zeros = torch.zeros(nb, requires_grad=False)
+            ones = torch.ones(nb, requires_grad=False)
+            #  history = {
+            #      'traj': torch.zeros((self.param.ntraj, nb), requires_grad=False),
+            #      'dt': torch.zeros((self.param.ntraj, nb), requires_grad=False),
+            #      'acc': torch.ones((self.param.ntraj, nb), requires_grad=False),
+            #      'dh': torch.zeros((self.param.ntraj, nb), requires_grad=False),
+            #      'exp_mdh': torch.ones((self.param.ntraj, nb), requires_grad=False),
+            #      'dqsq': torch.zeros((self.param.ntraj, nb), requires_grad=False),
+            #      'plaq': torch.ones((self.param.ntraj, nb), requires_grad=False),
+            #  }
+            #  history = {
+            #      'traj': zeros.clone(),
+            #      'dt': zeros.clone(),
+            #      'acc': ones.clone(),
+            #      'dh': zeros.clone(),
+            #      'exp_mdh': ones.clone(),
+            #      'dqsq': zeros.clone(),
+            #      'plaq': ones.clone(),
+            #  }
+            history = {
+                'traj': [0],
+                'dt': [0.],
+                'acc': [grab(ones.clone())],
+                'dH': [grab(zeros.clone())],
+                'exp_mdh': [grab(ones.clone())],
+                'dqsq': [grab(zeros.clone())],
+                'q': [grab(q)],
+                'plaq': [grab(p)],
+            }
+
+            for i in range(1, self.param.ntraj):
                 t_ = time.time()
-                q0 = self._charges_fn(x)
+                x, acc, dh, exp_mdh = self.build_trajectory(x)
+                #  qold = self._charges_fn(x)
                 #q0 = qed.(x[None, :])
 
-                x, acc, dH, exp_mdH = self.build_trajectory(x)
                 #x = self.
-                q1 = self._charges_fn(x)
+                #  qold = history['q'][-1]
+                qold = qarr[i-1]
+                qnew = qed.batch_charges(x)
+                #  qnew = self._charges_fn(x)
                 #q1 = qed.batch_charges(x[None, :])
 
-                dqsq = (q1 - q0) ** 2
+                dqsq = (qnew - qold) ** 2
+                #  dqsq_avg = dqsq.mean()
+                #  dqsq_avg = (dqsq[-window:])
                 #logp = (-1.) * self._action_fn(x)
-                logp = (-1.) * self.action(x)
-                plaq = logp / (beta * volume)
-                plaq_no_grad = plaq.detach()
+                #  logp = (-1.) * self.action(x)
+                plaq = (-1.) * self.action(x) / (beta * volume)
+                #  plaq_no_grad = plaq.detach()
 
-                qarr[i] = q1
+                qarr[i] = qnew
                 metrics = {
-                    'traj': i,
-                    'dt': time.time() - t_,
+                    'traj': n * self.param.ntraj + i + 1,
                     'acc': acc,
-                    'dH': dH,
-                    'exp_mdH': exp_mdH,
+                    'dh': dh,
+                    'exp_mdh': exp_mdh,
                     'dqsq': dqsq,
-                    'q': q1,
-                    'plaq': plaq_no_grad,
+                    #  'q': int(qnew),
+                    'plaq': plaq,
                 }
 
+                history['dt'].append(time.time() - t_)
                 for key, val in metrics.items():
+                    #  history[key][i] = val
                     try:
                         history[key].append(grab(val))
                     except KeyError:
                         history[key] = [grab(val)]
 
                 if i % nplot == 0:
-                    #  acc_ = torch.Tensor([list(i) for i in
-                    #                       history['acc']).mean(-1)
-                    #acc_ = torch.Tensor(history).mean(-1)
-                    dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
-
-                    #  acc_ = history['acc'][-1].mean()
-                    #  dqsq_ = history['dqsq'][-1].mean()
-                    #  plaq_ = history['plaq'][-1].mean()
-                    #  q = qarr[:, 0]
-                    #  plaq_ = torch.Tensor(history['plaq']).mean(-1)
                     data = {
                         #  'q': grab(qarr[:, 0]),
-                        'dqsq': dqsq_avg,
+                        'dqsq': history['dqsq'],
+                        #  'dqsq': dqsq_avg.detach().numpy(),
                         'acc': history['acc'],
                         'plaq': history['plaq'],
                     }
-                    plotter.update_plots(plots, data, window=5)
+                    plotter.update_plots(plots, data)  # , window=10)
 
 
                 if i % nprint == 0:
-                    logger.print_metrics(metrics, skip=['q'], pre=['(now)'],
+                    logger.print_metrics(history, skip=['q'], pre=['(now)'],
                                          window=0)
-                    logger.print_metrics(metrics, skip=['q'], pre=['(avg)'],
+                    logger.print_metrics(history, skip=['q'], pre=['(avg)'],
                                          window=10)
                 #logger.print_metrics(metrics, skip=['q'], pre=['(avg)'],
                 #                     window=min(i, 20))
