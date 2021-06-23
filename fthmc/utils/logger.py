@@ -40,9 +40,9 @@ TensorArrayLike = "Union[TensorList, TensorTuple, torch.Tensor]"
 Scalar = "Union[int, bool, float]"
 
 def strformat(
-    k: str,
-    v: Union[Scalar, TensorArrayLike],
-    window: int = 0
+        k: str,
+        v: Union[Scalar, TensorArrayLike],
+        window: int = 0
 ):
     if isinstance(v, tuple) and len(v) == 1:
         v = v[0]

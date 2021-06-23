@@ -192,22 +192,23 @@ def ft_flow_inv(flow: list[nn.Module], x: torch.Tensor):
     return x.detach()
 
 
-def ft_action(param: Param, flow: torch.Tensor, f: torch.Tensor):
-    y = f
+def ft_action(param: Param, flow: list[nn.Module], x: torch.Tensor):
+    y = x.clone()
     logdet = 0.
     for layer in flow:
-        y, logdet_ = layer.forward(y)
+        y, logdet_ = layer(y)
+        #  y, logdet_ = layer.forward(y)
         logdet += logdet_
 
     act_fn = BatchAction(param.beta)
-    s = act_fn(y) - logdet
+    s = BatchAction(param.beta)(y) - logdet
 
     return s
 
 
 def ft_force(
         param: Param,
-        flow: nn.Module,
+        flow: list[nn.Module],
         field: torch.Tensor,
         create_graph=False
 ):

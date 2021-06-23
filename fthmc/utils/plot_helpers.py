@@ -15,7 +15,10 @@ from fthmc.config import Param, TrainConfig
 from fthmc.utils.logger import in_notebook
 
 MPL_BACKEND = os.environ.get('MPLBACKEND', None)
-EXT = ('png' if MPL_BACKEND == 'module://itermplot' else 'pdf')
+EXT = (
+    'png' if MPL_BACKEND == 'module://itermplot' or in_notebook()
+    else 'pdf'
+)
 
 logger = io.Logger()
 
@@ -208,7 +211,10 @@ def plot_history(
                         num_chains=num_chains,
                         verbose=verbose,
                         **kwargs)
-    plt.close('all')
+    if not in_notebook():
+        plt.close('all')
+    else:
+        plt.show()
 
 
 def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
@@ -357,6 +363,12 @@ def moving_average(x: np.ndarray, window: int = 10):
     return np.convolve(x, np.ones(window), 'valid') / window
 
 
+def update_plots(plots, metrics):
+    for key, val in metrics.items():
+        if key in plots:
+            update_plot(y=val, **plots[key])
+
+
 def update_plot(
         y: Metric,
         fig: plt.Figure,
@@ -365,7 +377,13 @@ def update_plot(
         display_id: DisplayHandle,
         window: int = 15,
 ):
-    y = np.array(y)
+    if isinstance(y, torch.Tensor):
+        if y.requires_grad_:
+            y = y.detach()
+        y = y.numpy()
+    else:
+        y = np.array(y)
+
     yavg = moving_average(y, window=window)
     line[0].set_ydata(y)
     line[0].set_xdata(np.arange(y.shape[0]))
