@@ -241,8 +241,8 @@ def train_step(
         'dt': time.time() - t0,
         'ess': grab(ess),
         'loss_dkl': grab(loss_dkl),
-        'logp': grab(logp),
-        'logq': grab(logq),
+        #  'logp': grab(logp),
+        #  'logq': grab(logq),
         'q': grab(q),
         'dqsq': grab(dqsq),
         'plaq': grab(plaq),
@@ -389,8 +389,8 @@ def train(
             if step % print_freq == 0:
                 #  running_avgs = running_averages(history, win, False)
                 logger.print_metrics(metrics,
-                                      skip=skip,
-                                      pre=['(now)', *pre])
+                                     skip=skip,
+                                     pre=['(now)', *pre])
 
                 logger.print_metrics(history,
                                      skip=skip,
