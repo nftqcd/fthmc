@@ -12,6 +12,8 @@ import joblib
 import datetime
 
 
+WITH_CUDA = torch.cuda.is_available()
+
 def in_notebook():
     """Simple checker function to see if we're currently in a notebook."""
     try:
@@ -39,6 +41,15 @@ TensorTuple = "tuple[torch.Tensor]"
 TensorArrayLike = "Union[TensorList, TensorTuple, torch.Tensor]"
 Scalar = "Union[int, bool, float]"
 
+
+def moving_average(x: torch.Tensor, window: int = 10):
+    if len(x.shape) > 0 and x.shape[0] < window:
+        #  return x.mean(keepdim=True)
+        return np.mean(x, keepdims=True)
+        #  return np.mean(x, keepdims=True)
+    #  return torch.convolution(
+    return np.convolve(x, np.ones(window), 'valid') / window
+
 def strformat(
         k: str,
         v: Union[Scalar, TensorArrayLike],
@@ -47,8 +58,15 @@ def strformat(
     if isinstance(v, tuple) and len(v) == 1:
         v = v[0]
 
-    if torch.is_tensor(v):
-        v = v.detach().cpu().numpy()  # torch.Tensor
+    #  if torch.is_tensor(v):
+    if isinstance(v, torch.Tensor):
+        if v.requires_grad_:
+            v = v.detach()
+
+        if WITH_CUDA:
+            v = v.cpu()
+
+        v = v.numpy()  # torch.Tensor
 
     if isinstance(v, int):
         return f'{str(k)}={int(v)}'
@@ -62,8 +80,14 @@ def strformat(
     if isinstance(v, (list, np.ndarray)):
         v = np.array(v)
         if window > 0 and len(v.shape) > 0:
-            window = min((v.shape[0], window))
+            if v.shape[0] < window:
+                window = min((v.shape[0] - 1, 1))
+            #
+            #  avgd = moving_average(v, window=window).mean()
             avgd = v[-window:].mean()
+        #  if window > 0 and len(v.shape) > 0:
+        #      window = min((v.shape[0], window))
+        #      avgd = v[-window:].mean()
         else:
             avgd = v.mean()
 

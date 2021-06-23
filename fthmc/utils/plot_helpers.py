@@ -217,55 +217,81 @@ def plot_history(
         plt.show()
 
 
-def init_plots(config: TrainConfig, param: Param, figsize: tuple = (8, 3)):
+def init_plots(
+        config: TrainConfig,
+        param: Param,
+        dpi: int = 120,
+        figsize: tuple = None,
+):
     plots_dqsq = {}
     plots_dkl = {}
-    plots_force = {}
+    plots_ess = {}
+    colors_rb = ['#00CCFF', '#f92672']
+    colors_gp = ['#66ff66', '#ff5fff']
+    colors_yp = ['#ffff78', '#cc78fa']
+    #  plots_force = {}
+    if figsize is None:
+        figsize = (8, 3)
+
     if in_notebook:
-        plots_dqsq = init_live_plot(figsize=figsize,
-                                    param=param, config=config,
-                                    ylabel='dqsq', xlabel='Epoch')
+        #  plots_dqsq = init_live_plot(figsize=figsize, dpi=dpi,
+        #                              param=param, config=config,
+        #                              ylabel='dqsq', xlabel='Epoch')
 
         ylabel_dkl = ['loss_dkl', 'ESS']
-        plots_dkl = init_live_joint_plots(config.n_era, config.n_epoch,
-                                          figsize=figsize, param=param,
-                                          config=config,
-                                          ylabel=ylabel_dkl)
+        plots_dkl = init_live_joint_plots(config.n_era,
+                                          config.n_epoch, figsize=figsize,
+                                          param=param, colors=colors_rb,
+                                          config=config, ylabel=ylabel_dkl)
+        ylabel_ess = ['dqsq', 'ess']
+        plots_ess = init_live_joint_plots(config.n_era, config.n_epoch,
+                                          figsize=figsize,
+                                          colors=colors_gp, param=param,
+                                          config=config, ylabel=ylabel_ess)
 
-        if config.with_force:
-            ylabel_force = ['loss_force', 'ESS']
-            plots_force = init_live_joint_plots(config.n_era,
-                                                config.n_epoch,
-                                                figsize=figsize,
-                                                param=param,
-                                                config=config,
-                                                ylabel=ylabel_force)
+        #  if config.with_force:
+        #      ylabel_force = ['loss_force', 'ESS']
+        #      plots_force = init_live_joint_plots(config.n_era,
+        #                                          config.n_epoch,
+        #                                          figsize=figsize,
+        #                                          param=param,
+        #                                          config=config,
+        #                                          ylabel=ylabel_force)
 
     return {
         'dqsq': plots_dqsq,
         'dkl': plots_dkl,
-        'force': plots_force,
+        #  'force': plots_force,
+        'ess': plots_ess,
     }
 
 
 def init_live_joint_plots(
         n_era: int,
         n_epoch: int,
-        dpi: int = 400,
-        figsize: tuple = (5, 2),
+        dpi: int = 120,
+        figsize: tuple = None,
         param: Param = None,
         config: TrainConfig = None,
         xlabel: str = None,
         ylabel: list[str] = None,
         colors: list[str] = None,
+        use_title: bool = False,
+        set_xlim: bool = False,
 ):
     if colors is None:
-        colors = ['#0096ff', '#f92672']
+        colors = ['#00CCFF', '#f92672']
+        #colors = ['#66ff66', '#ff5fff']
+        #colors = ['#ffff78', '#cc78fa']
 
+    if figsize is None:
+        figsize = (8 ,3)
     #  sns.set_style('ticks')
     fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
                             constrained_layout=True)
-    plt.xlim(0, n_era * n_epoch)
+    if set_xlim:
+        plt.xlim(0, n_era * n_epoch)
+
     line0 = ax0.plot([0], [0], alpha=0.9, c=colors[0])
     ax1 = ax0.twinx()
     if ylabel is None:
@@ -286,16 +312,10 @@ def init_live_joint_plots(
     ax1.grid(False)
     ax0.set_xlabel('Epoch' if xlabel is None else xlabel)
 
-    title = get_title(param, config)
-    if len(title) > 0:
-        fig.suptitle('\n'.join(title))
-    #  title = ''
-    #  if param is not None:
-    #      title += param.uniquestr()
-    #  if config is not None:
-    #      title += config.uniquestr()
-
-    #  fig.suptitle(title)
+    if use_title:
+        title = get_title(param, config)
+        if len(title) > 0:
+            fig.suptitle('\n'.join(title))
 
     display_id = display(fig, display_id=True)
     plot_obj1 = PlotObject(ax0, line0)
@@ -321,24 +341,27 @@ def get_title(param: Param = None, config: TrainConfig = None):
 
 
 def init_live_plot(
-        dpi: int = 400,
-        figsize: tuple[int] = (5, 2),
+        dpi: int = 120,
+        figsize: tuple = None,
         param: Param = None,
         config: TrainConfig = None,
         xlabel: str = None,
         ylabel: str = None,
+        use_title: bool = True,
         **kwargs
 ):
-    color = kwargs.pop('color', '#0096FF')
+    color = kwargs.pop('color', '#87ff00')
     xlabel = 'Epoch' if xlabel is None else xlabel
+    if figsize is None:
+        figsize = (7, 3)
     #  sns.set_style('ticks')
     fig, ax = plt.subplots(dpi=dpi, figsize=figsize, constrained_layout=True)
     line = ax.plot([0], [0], c=color, **kwargs)
 
-    title = get_title(param, config)
-
-    if len(title) > 0:
-        _ = fig.suptitle('\n'.join(title))
+    if use_title:
+        title = get_title(param, config)
+        if len(title) > 0:
+            _ = fig.suptitle('\n'.join(title))
 
     if ylabel is not None:
         _ = ax.set_ylabel(ylabel, color=color)
@@ -363,10 +386,10 @@ def moving_average(x: np.ndarray, window: int = 10):
     return np.convolve(x, np.ones(window), 'valid') / window
 
 
-def update_plots(plots, metrics):
+def update_plots(plots, metrics, window: int = 0):
     for key, val in metrics.items():
         if key in plots:
-            update_plot(y=val, **plots[key])
+            update_plot(y=val, window=window, **plots[key])
 
 
 def update_plot(
@@ -375,16 +398,21 @@ def update_plot(
         ax: plt.Axes,
         line: list[plt.Line2D],
         display_id: DisplayHandle,
-        window: int = 15,
+        window: int = 0,
 ):
     if isinstance(y, torch.Tensor):
         if y.requires_grad_:
             y = y.detach()
-        y = y.numpy()
+        try:
+            y = y.cpu().numpy()
+        except AttributeError:
+            y = y.numpy()
     else:
         y = np.array(y)
 
-    yavg = moving_average(y, window=window)
+    if window > 0:
+        y = moving_average(np.array(y).squeeze(), window=window)
+
     line[0].set_ydata(y)
     line[0].set_xdata(np.arange(y.shape[0]))
     #  line[0].set_xdata(np.arange(len(yavg)))
@@ -398,6 +426,9 @@ def update_joint_plots(
         plot_data1: LivePlotData,
         plot_data2: LivePlotData,
         display_id: DisplayHandle,
+        fig: plt.Figure = None,
+        ax1: plt.Axes = None,
+        ax2: plt.Axes = None,
         window=15,
         alt_loss=None,
 ):
@@ -406,7 +437,8 @@ def update_joint_plots(
     plot_obj1 = plot_data1.plot_obj
     plot_obj2 = plot_data2.plot_obj
 
-    fig = plt.gcf()
+    if fig is None:
+        fig = plt.gcf()
 
     x1 = np.array(x1).squeeze()
     x2 = np.array(x2).squeeze()
