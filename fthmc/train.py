@@ -270,7 +270,8 @@ def train(
         config: TrainConfig,
         model: FlowModel = None,  # dict[str, nn.Module] = None,
         pre_model: FlowModel = None,  # dict[str, nn.Module] = None,
-        figsize: tuple = (5, 2),
+        figsize: tuple = (6, 3),
+        dpi: int = 120,
         #  force_factor: float = 0.01,
         dkl_factor: float = 1.,
         history: dict[str, list] = None,
@@ -335,7 +336,7 @@ def train(
     interactive = logging.in_notebook()
     plots = {}
     if interactive:
-        plots = plotter.init_plots(config, param, figsize=figsize)
+        plots = plotter.init_plots(config, param, dpi=dpi, figsize=figsize)
 
     dt = 0.0
     step = 0
@@ -398,11 +399,11 @@ def train(
 
             if step % plot_freq == 0 and interactive:
                 dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
-                plotter.update_plot(y=dqsq_avg,
-                                    ax=plots['dqsq']['ax'],
-                                    fig=plots['dqsq']['fig'],
-                                    line=plots['dqsq']['line'],
-                                    display_id=plots['dqsq']['display_id'])
+                #  plotter.update_plot(y=dqsq_avg,
+                #                      ax=plots['dqsq']['ax'],
+                #                      fig=plots['dqsq']['fig'],
+                #                      line=plots['dqsq']['line'],
+                #                      display_id=plots['dqsq']['display_id'])
 
                 epdata = PlotData(history['ess'],
                                   plots['dkl']['plot_obj2'])
@@ -410,7 +411,14 @@ def train(
                                   plots['dkl']['plot_obj1'])
 
                 plotter.update_joint_plots(lpdata, epdata,
-                                           plots['dkl']['display_id'])
+                                           fig=plots['dkl']['fig'],
+                                           display_id=plots['dkl']['display_id'])
+                dqdata = PlotData(dqsq_avg,
+                                  plots['ess']['plot_obj1'])
+                eqdata = PlotData(history['ess'], plots['ess']['plot_obj2'])
+                plotter.update_joint_plots(dqdata, eqdata,
+                                           fig=plots['ess']['fig'],
+                                           display_id=plots['ess']['display_id'])
                 #  dq = np.array(history['dq'])[-window:]
                 #  plot_metrics = {
                 #      'dqsq': history['dqsq'],
