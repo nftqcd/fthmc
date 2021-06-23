@@ -226,8 +226,11 @@ def init_plots(
     plots_dqsq = {}
     plots_dkl = {}
     plots_ess = {}
-    colors_rb = ['#00CCFF', '#f92672']
-    colors_gp = ['#66ff66', '#ff5fff']
+    colors_rb = ['C0', 'C1']
+    colors_gp = ['C2', 'C3']
+    colors_yp = ['C4', 'C9']
+    #  colors_rb = ['#00CCFF', '#f92672']
+    #  colors_gp = ['#66ff66', '#ff5fff']
     colors_yp = ['#ffff78', '#cc78fa']
     #  plots_force = {}
     if figsize is None:
@@ -356,7 +359,7 @@ def init_live_plot(
     color = kwargs.pop('color', '#87ff00')
     xlabel = 'Epoch' if xlabel is None else xlabel
     if figsize is None:
-        figsize = (7, 3)
+        figsize = (8, 2.75)
     #  sns.set_style('ticks')
     fig, ax = plt.subplots(dpi=dpi, figsize=figsize, constrained_layout=True)
     line = ax.plot([0], [0], c=color, **kwargs)
@@ -408,15 +411,27 @@ def update_plot(
         display_id: DisplayHandle,
         window: int = 0,
 ):
+    #  if isinstance(y, torch.Tensor):
+    #      if y.requires_grad_:
+    #          y = y.detach()
+    #      try:
+    #          y = y.cpu().numpy()
+    #      except AttributeError:
+    #          y = y.numpy()
+    #  else:
+    #      y = np.array(y)
+
+    if isinstance(y, list):
+        if isinstance(y[0], tuple) and len(y[0]) == 1:
+            y = [grab(m[0]) for m in y]
+
+    if isinstance(y, list) and isinstance(y[0], torch.Tensor):
+        y = torch.Tensor(y).detach().cpu().numpy().squeeze()
+
     if isinstance(y, torch.Tensor):
-        if y.requires_grad_:
-            y = y.detach()
-        try:
-            y = y.cpu().numpy()
-        except AttributeError:
-            y = y.numpy()
-    else:
-        y = np.array(y)
+        y = torch.Tensor(y).detach().cpu().numpy().squeeze()
+
+    y = np.array(y)
 
     #  if window > 0 and y.shape[0] > 1:
     #  if window > 0 and len(y.shape) > 0:
