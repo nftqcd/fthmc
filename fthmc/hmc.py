@@ -3,13 +3,13 @@ hmc.py
 """
 from __future__ import absolute_import, print_function, division, annotations
 
-from fthmc.utils.plot_helpers import plot_history
-from fthmc.config import LOGS_DIR
+from fthmc.utils.plot_helpers import init_live_plot, plot_history, update_plots
+from fthmc.config import LOGS_DIR, TrainConfig
 import os
 import torch
 from fthmc.config import Param
 import fthmc.utils.io as io
-from fthmc.utils.logger import Logger, check_else_make_dir, savez
+from fthmc.utils.logger import Logger, check_else_make_dir, in_notebook, savez
 import time
 
 import fthmc.utils.qed_helpers as qed
@@ -25,11 +25,36 @@ def grab(x: torch.Tensor):
     return x.detach().cpu().numpy()
 
 
+def init_live_plots(
+    param: Param,
+    #  config: TrainConfig,
+    xlabels: list,
+    ylabels: list,
+    dpi: int = 120,
+    figsize: tuple = None,
+    colors: list = None,
+):
+    plots = {}
+    if colors is None:
+        colors = [f'C{i}' for i in range(10)]
+    else:
+        assert len(colors) == len(ylabels)
+    for idx, (xlabel, ylabel) in enumerate(zip(xlabels, ylabels)):
+        plots[ylabel] = init_live_plot(dpi=dpi, figsize=figsize,
+                                       param=param,  # , config=config,
+                                       color=colors[idx],
+                                       xlabel=xlabel, ylabel=ylabel)
+
+    return plots
+
 def run_hmc(
         param: Param,
-        #  x: torch.Tensor = None,
+        x: torch.Tensor = None,
         #  keep_fields: bool = True,
         plot_metrics: bool = True,
+        colors: list = None,
+        nprint: int = 1,
+        nplot: int = 10,
 ):
     """Run generic HMC.
 
@@ -50,6 +75,27 @@ def run_hmc(
     histories = {}
     run_times = []
     fields_arr = []
+    ylabels = ['acc', 'dqsq', 'plaq']
+    xlabels = len(ylabels) * ['trajectory']
+    plots = init_live_plots(param=param,  # config=config,
+                            xlabels=xlabels, ylabels=ylabels)
+    #  plots_acc = plotter.init_live_plot(dpi=dpi,
+    #                                     figsize=figsize,
+    #                                     ylabel='acc',
+    #                                     color='#F92672',
+    #                                     param=self.param,
+    #                                     xlabel='trajectory',
+    #                                     config=self.config)
+    #  plots_dqsq = plotter.init_live_plot(dpi=dpi,
+    #                                      figsize=figsize,
+    #                                      color='#00CCff',
+    #                                      ylabel='dqsq',
+    #                                      xlabel='trajectory')
+    #  plots_plaq = plotter.init_live_plot(figsize=figsize,
+    #                                      dpi=dpi,
+    #                                      color='#ffff00',
+    #                                      ylabel='plaq',
+    #                                      xlabel='trajectory')
     for n in range(param.nrun):
         t0 = time.time()
 
@@ -101,6 +147,14 @@ def run_hmc(
             #  if (i - 1) % (param.ntraj // param.nprint) == 0:
             if (i - 1) % param.nprint == 0:
                 _ = logger.print_metrics(metrics)
+
+            if in_notebook() and i % nplot == 0:
+                data = {
+                    'dqsq': history['dqsq'],
+                    'acc': history['acc'],
+                    'plaq': history['plaq'],
+                }
+                update_plots(plots, data)
 
         dt = time.time() - t0
         run_times.append(dt)
