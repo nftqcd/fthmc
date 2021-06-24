@@ -425,11 +425,15 @@ def update_plot(
         if isinstance(y[0], tuple) and len(y[0]) == 1:
             y = [grab(m[0]) for m in y]
 
-    if isinstance(y, list) and isinstance(y[0], torch.Tensor):
-        y = torch.Tensor(y).detach().cpu().numpy().squeeze()
+        if isinstance(y[0], torch.Tensor):
+            y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
+            #  y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
 
-    if isinstance(y, torch.Tensor):
-        y = torch.Tensor(y).detach().cpu().numpy().squeeze()
+    #  if isinstance(y, torch.Tensor):
+    #      y = torch.Tensor(y).detach().cpu().numpy().squeeze()
+
+    if len(y.shape) == 2:
+        y = y.mean(-1)
 
     yavg = moving_average(np.array(y).squeeze(), window=window)
 
