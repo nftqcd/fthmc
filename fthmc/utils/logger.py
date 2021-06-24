@@ -2,7 +2,6 @@
 logger.py
 """
 from __future__ import absolute_import, division, print_function, annotations
-from fthmc.config import grab
 import os
 from pathlib import Path
 from typing import Any, Union
@@ -14,6 +13,11 @@ import datetime
 
 
 WITH_CUDA = torch.cuda.is_available()
+
+
+def grab(x: torch.Tensor):
+    return x.detach().cpu().numpy()
+
 
 def in_notebook():
     """Simple checker function to see if we're currently in a notebook."""

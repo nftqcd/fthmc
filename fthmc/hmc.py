@@ -103,8 +103,8 @@ def run_hmc(
         logger.rule(hstr)
 
         x = param.initializer()
-        p = (-1.) * action(x[None, :]) / (param.beta * param.volume)
-        q = qed.batch_charges(x[None, :])
+        p = (-1.) * action(x) / (param.beta * param.volume)
+        q = qed.batch_charges(x)
 
         logger.print_metrics({'plaq': p, 'q': q})
         xarr = []
@@ -122,10 +122,10 @@ def run_hmc(
             dH, exp_mdH, acc, x = qed.hmc(param, x, verbose=False)
 
             qold = history['q'][-1]
-            qnew = qed.batch_charges(x[None, :])
+            qnew = qed.batch_charges(x)
             dqsq = (int(qnew) - int(qold)) ** 2
 
-            plaq = (-1.) * action(x[None, :]) / (param.beta * param.volume)
+            plaq = (-1.) * action(x) / (param.beta * param.volume)
 
             xarr.append(x)
 

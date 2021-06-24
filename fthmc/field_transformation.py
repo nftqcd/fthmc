@@ -316,11 +316,11 @@ class FieldTransformation(nn.Module):
 
 
                 if i % nprint == 0:
-                    pre = ['(now)', f'traj={i}']
-                    logger.print_metrics(metrics, pre=pre)
+                    #  pre = ['(now)', f'traj={i}']
+                    logger.print_metrics(metrics)  # , pre=pre)
                     #  logger.print_metrics(history, skip=['q'], pre=pre,
                     #                       window=0)
-                    pre = ['(avg)', f'traj={i}']
+                    #  pre = ['(avg)', f'traj={i}']
                     #  logger.print_metrics(history, skip=['q'], pre=['(avg)'],
                     #                       window=10)
                 #logger.print_metrics(metrics, skip=['q'], pre=['(avg)'],
