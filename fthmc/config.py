@@ -56,6 +56,18 @@ class FlowModel:
 
 
 @dataclass
+class SchedulerConfig:
+    factor: float
+    mode: str = 'min'
+    patience: int = 10
+    threshold: float = 1e-4
+    threshold_mode: str = 'rel'
+    cooldown: int = 0
+    min_lr: float = 1e-5
+    verbose: bool = True
+
+
+@dataclass
 class Param:
     beta: float = 6.0       # Inverse coupling constant
     L: int = 8              # Linear extent of square lattice, (L x L)

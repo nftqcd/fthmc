@@ -22,7 +22,7 @@ import fthmc.utils.io as io
 import fthmc.utils.logger as logging
 import fthmc.utils.plot_helpers as plotter
 import fthmc.utils.qed_helpers as qed
-from fthmc.config import Param, TrainConfig, FlowModel
+from fthmc.config import Param, SchedulerConfig, TrainConfig, FlowModel
 from fthmc.utils.distributions import MultivariateUniform, calc_dkl, calc_ess
 from fthmc.utils.layers import (get_nets, make_net_from_layers,
                                 make_u1_equiv_layers, set_weights)
@@ -247,34 +247,25 @@ def train_step(
 
 PlotData = plotter.LivePlotData
 
-@dataclass
-class SchedulerConfig:
-    factor: float
-    mode: str = 'min'
-    patience: int = 10
-    threshold: float = 1e-4
-    threshold_mode: str = 'rel'
-    cooldown: int = 0
-    min_lr: float = 1e-5
-    verbose: bool = True
-
 
 def train(
         param: Param,
         config: TrainConfig,
-        model: FlowModel = None,  # dict[str, nn.Module] = None,
-        pre_model: FlowModel = None,  # dict[str, nn.Module] = None,
-        figsize: tuple = (6, 3),
+        model: FlowModel = None,
+        pre_model: FlowModel = None,
+        scheduler_config: SchedulerConfig = None,
+        figsize: tuple = None,
         dpi: int = 120,
-        #  force_factor: float = 0.01,
         dkl_factor: float = 1.,
         history: dict[str, list] = None,
         weight_decay: float = 0.,
-        scheduler_config: SchedulerConfig = None,
         device: str = None,
         xi: torch.Tensor = None,
 ):
     """Train the flow model."""
+    if figsize is None:
+        figsize = (4, 3)
+
     if history is None:
         history = {}
 
