@@ -79,9 +79,11 @@ class Param:
 
     def initializer(self):
         if self.randinit:
-            return torch.empty([self.nd,] + self.lat).uniform_(-PI, PI)
+            x = torch.empty([self.nd,] + self.lat).uniform_(-PI, PI)
         else:
-            return torch.zeros([self.nd,] + self.lat)
+            x = torch.zeros([self.nd,] + self.lat)
+
+        return x[None, :]
 
     def __repr__(self):
         status = {k: v for k, v in self.__dict__.items()}
