@@ -3,6 +3,7 @@ import time
 from typing import Union
 import torch
 import torch.nn as nn
+import torch.autograd.functional as F
 import numpy as np
 
 from fthmc.utils import qed_helpers as qed
@@ -84,6 +85,8 @@ class FieldTransformation(nn.Module):
         self._action_fn = lambda x: action_fn(x)
         self._action_denom = (self.param.beta * self.param.volume)
         self._charges_fn = lambda x: qed.batch_charges(x)
+        action_sum = lambda x: self.action(x).sum(-1)
+        self._dsdx_fn = lambda x: F.jacobian(action_sum, x)
 
     def action(self, x: torch.Tensor):
         z, logdet = self.flow_forward(x)
@@ -111,7 +114,12 @@ class FieldTransformation(nn.Module):
 
         return x, logdet
 
-    def force(self, x: torch.Tensor, **kwargs):
+    def force(self, x: torch.Tensor):
+        dsdx = self._dsdx_fn(x)
+        x.detach_()
+        return dxdx
+
+    def force1(self, x: torch.Tensor, **kwargs):
         #  s = torch.tensor(0., requires_grad=True)
         x.requires_grad_(True)
         s = 0.
