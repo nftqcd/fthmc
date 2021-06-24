@@ -180,7 +180,7 @@ class FieldTransformation(nn.Module):
             v = v + (-dt) * self.force(x)  # , retain_graph=True)
 
         x = x + 0.5 * dt * v
-        return x.detach(), v
+        return x, v
 
     def build_trajectory(self, x: torch.Tensor = None, step: int = None):
         t0 = time.time()
@@ -191,7 +191,8 @@ class FieldTransformation(nn.Module):
         if step is not None:
             metrics = {'traj': step}
 
-        nb = x.shape[0]
+        #  xshape = x.shape
+        #  nb = x.shape[0]
 
         x0 = x.clone()
 
@@ -207,21 +208,25 @@ class FieldTransformation(nn.Module):
 
         dh = h1 - h0
         exp_mdh = torch.exp(-dh)
-        acc = (torch.rand_like(exp_mdh) < exp_mdh).int()
-        x_ = acc * x1 + (1 - acc) * x0
+        acc = (torch.rand_like(exp_mdh) < exp_mdh)
+        m = acc[:, None].to(torch.uint8)
+        x_ = m * x1.flatten(start_dim=1) + (1 - m) * x0.flatten(start_dim=1)
+        x_ = x_.reshape(x0.shape)
+        #  x_ = torch.zeros(x0.shape)
+        #  x_ = acc * x1 + (1 - acc) * x0
 
         q1 = self._charges_fn(x_)
         p1 = self._plaq_fn(x_)
-        dqsq = (int(q1) - int(q0)) ** 2
+        dqsq = (q1 - q0) ** 2
         #  xout, _ = self.flow_backward(x)
         xout, _ = self.flow_forward(x_)
         metrics.update(**{
             'dt': time.time() - t0,
-            'acc': acc,
+            'acc': acc.float().detach(),
             'dh': dh,
             'exp_mdh': exp_mdh,
-            'q': q1.detach(),
-            'dqsq': dqsq,
+            'q': q1.to(torch.int).detach(),
+            'dqsq': dqsq.detach(),
             'plaq': p1.detach(),
         })
 
@@ -312,7 +317,7 @@ class FieldTransformation(nn.Module):
                         'acc': history['acc'],
                         'plaq': history['plaq'],
                     }
-                    plotter.update_plots(plots, data)  # , window=10)
+                    plotter.update_plots(plots, data, window=5)  # , window=10)
 
 
                 if i % nprint == 0:
@@ -326,8 +331,18 @@ class FieldTransformation(nn.Module):
                 #logger.print_metrics(metrics, skip=['q'], pre=['(avg)'],
                 #                     window=min(i, 20))
 
-            runs_history[n] = history
-            plotter.plot_history(history, self.param, therm_frac=0.0,
+            hist = {}
+            for key, val in history.items():
+                if key in ['traj', 'dt']:
+                    vt = torch.tensor(val, dtype=torch.float)
+                else:
+                    vt = torch.Tensor(torch.stack(val).to(torch.float))
+
+                hist[key] = vt
+
+            plotter.plot_history(hist,
+                                 self.param,
+                                 therm_frac=0.0,
                                  xlabel='Trajectory')
 
         return runs_history
