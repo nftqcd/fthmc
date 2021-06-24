@@ -431,7 +431,7 @@ def update_plot(
     if isinstance(y, torch.Tensor):
         y = torch.Tensor(y).detach().cpu().numpy().squeeze()
 
-    y = np.array(y)
+    yavg = moving_average(np.array(y).squeeze(), window=window)
 
     #  if window > 0 and y.shape[0] > 1:
     #  if window > 0 and len(y.shape) > 0:
@@ -440,16 +440,16 @@ def update_plot(
     #      else:
     #          y = y[-window:]
     #      #  y = moving_average(np.array(y).squeeze(), window=window)
-    avgd = y[-window:]
-    if window > 0 and len(y.shape) > 0:
-        if y.shape[0] < window:
-            window = min((y.shape[0], -1, 1))
+    #  avgd = y[-window:]
+    #  if window > 0 and len(y.shape) > 0:
+    #      if y.shape[0] < window:
+    #          window = min((y.shape[0], -1, 1))
+    #
+    #      avgd = y[-window:].mean(-1)
 
-        avgd = y[-window:].mean(-1)
-
-    line[0].set_ydata(avgd)
+    line[0].set_ydata(yavg)
     #  line[0].set_xdata(np.arange(y.shape[0]))
-    line[0].set_xdata(np.arange(avgd.shape[0]))
+    line[0].set_xdata(np.arange(yavg.shape[0]))
     #  line[0].set_xdata(np.arange(len(yavg)))
     ax.relim()
     ax.autoscale_view()

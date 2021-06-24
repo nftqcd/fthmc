@@ -117,7 +117,7 @@ class FieldTransformation(nn.Module):
     def force(self, x: torch.Tensor):
         dsdx = self._dsdx_fn(x)
         x.detach_()
-        return dxdx
+        return dsdx
 
     def force1(self, x: torch.Tensor, **kwargs):
         #  s = torch.tensor(0., requires_grad=True)
@@ -150,7 +150,6 @@ class FieldTransformation(nn.Module):
 
         return dsdx
 
-
     @staticmethod
     def wrap(x: torch.Tensor):
         mod = lambda x: torch.remainder(x, TWO_PI)
@@ -174,11 +173,11 @@ class FieldTransformation(nn.Module):
         dt = self.param.dt
 
         x = x + 0.5 * dt * v
-        v = v + (-dt) * self.force(x, retain_graph=True)
+        v = v + (-dt) * self.force(x)  # , retain_graph=True)
 
         for _ in range(self.param.nstep - 1):
             x = x + dt * v
-            v = v + (-dt) * self.force(x, retain_graph=True)
+            v = v + (-dt) * self.force(x)  # , retain_graph=True)
 
         x = x + 0.5 * dt * v
         return x.detach(), v
@@ -330,41 +329,9 @@ class FieldTransformation(nn.Module):
                 t_ = time.time()
                 #  x, acc, dh, exp_mdh = self.build_trajectory(x)
                 x, metrics = self.build_trajectory(x)
-                #  qold = self._charges_fn(x)
-                #q0 = qed.(x[None, :])
-
-                #x = self.
-                #  qold = history['q'][-1]
-                #  qold = qarr[-1]
-                #  qnew = qed.batch_charges(x)
-                #  qnew = self._charges_fn(x)
-                #q1 = qed.batch_charges(x[None, :])
-
-                #  dqsq = (qnew - qold) ** 2
-                #  dqsq_avg = dqsq.mean()
-                #  dqsq_avg = (dqsq[-window:])
-                #logp = (-1.) * self._action_fn(x)
-                #  logp = (-1.) * self.action(x)
-                #  plaq = (-1.) * self.action(x) / (beta * volume)
-                #  plaq_no_grad = plaq.detach()
 
                 qarr[i] = metrics['q']
-                #  metrics['traj'] = i
-                #  metrics['dt'] = time.time() - t0
-                #  metrics = {
-                #      #  'traj': n * self.param.ntraj + i + 1,
-                #      'traj': i,
-                #      'acc': acc,
-                #      'dh': dh,
-                #      'exp_mdh': exp_mdh,
-                #      'dqsq': dqsq,
-                #      #  'q': int(qnew),
-                #      'plaq': plaq,
-                #  }
-#
-                #  history['dt'].append(time.time() - t_)
                 for key, val in metrics.items():
-                    #  history[key][i] = val
                     try:
                         history[key].append(grab(val))
                     except KeyError:
@@ -372,9 +339,7 @@ class FieldTransformation(nn.Module):
 
                 if i % nplot == 0:
                     data = {
-                        #  'q': grab(qarr[:, 0]),
-                        'dqsq': history['dqsq'],
-                        #  'dqsq': dqsq_avg.detach().numpy(),
+                        'dqsq': np.array(history['dqsq']).mean(axis=-1),
                         'acc': history['acc'],
                         'plaq': history['plaq'],
                     }
