@@ -22,7 +22,7 @@ import fthmc.utils.io as io
 import fthmc.utils.logger as logging
 import fthmc.utils.plot_helpers as plotter
 import fthmc.utils.qed_helpers as qed
-from fthmc.config import Param, TrainConfig
+from fthmc.config import Param, TrainConfig, FlowModel
 from fthmc.utils.distributions import MultivariateUniform, calc_dkl, calc_ess
 from fthmc.utils.layers import (get_nets, make_net_from_layers,
                                 make_u1_equiv_layers, set_weights)
@@ -49,12 +49,6 @@ class qedMetrics:
             'plaq': self.plaq,
             'charge': self.charge
         }
-
-
-@dataclass
-class FlowModel:
-    prior: BasePrior
-    layers: nn.ModuleList
 
 #  class FlowModel(nn.Module):
 #      def __init__(self, prior: BasePrior, layers: nn.ModuleList):

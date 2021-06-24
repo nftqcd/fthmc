@@ -10,13 +10,15 @@ from functools import reduce
 import os
 from dataclasses import dataclass, field
 from math import pi as PI
-from typing import Any, Callable
+from typing import Callable, Union
 
-import matplotlib.pyplot as plt
+#  import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn
 
 from fthmc.utils.logger import Logger, get_timestamp
+from fthmc.utils.distributions import BasePrior
 
 __author__ = 'Sam Foreman'
 __date__ = '05/23/2021'
@@ -45,6 +47,12 @@ def grab(x: torch.Tensor):
 
 def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
+
+
+@dataclass
+class FlowModel:
+    prior: BasePrior
+    layers: Union[torch.nn.ModuleList, list[torch.nn.Module]]
 
 
 @dataclass
