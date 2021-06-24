@@ -83,8 +83,11 @@ class FieldTransformation(nn.Module):
         self.config = config
         action_fn = qed.BatchAction(param.beta)
         self._action_fn = lambda x: action_fn(x)
-        self._action_denom = (self.param.beta * self.param.volume)
-        self._charges_fn = lambda x: qed.batch_charges(x)
+        self._denom = (self.param.beta * self.param.volume)
+        self._charges_fn = lambda x: qed.batch_charges(x).detach()
+        self._plaq_fn = lambda x: (
+            ((-1.) * self._action_fn(x) / self._denom).detach()
+        )
         action_sum = lambda x: self.action(x).sum(-1)
         self._dsdx_fn = lambda x: F.jacobian(action_sum, x)
 
@@ -179,10 +182,14 @@ class FieldTransformation(nn.Module):
         x = x + 0.5 * dt * v
         return x.detach(), v
 
-    def build_trajectory(self, x: torch.Tensor = None):
+    def build_trajectory(self, x: torch.Tensor = None, step: int = None):
         t0 = time.time()
         if x is None:
             x = self.param.initializer()
+
+        metrics = {}
+        if step is not None:
+            metrics = {'traj': step}
 
         nb = x.shape[0]
 
@@ -204,19 +211,19 @@ class FieldTransformation(nn.Module):
         x_ = acc * x1 + (1 - acc) * x0
 
         q1 = self._charges_fn(x_)
-        p1 = (-1.) * self.action(x_) / self._action_denom
+        p1 = self._plaq_fn(x_)
         dqsq = (int(q1) - int(q0)) ** 2
         #  xout, _ = self.flow_backward(x)
         xout, _ = self.flow_forward(x_)
-        metrics = {
+        metrics.update(**{
             'dt': time.time() - t0,
             'acc': acc,
             'dh': dh,
             'exp_mdh': exp_mdh,
-            'q': q1,
+            'q': q1.detach(),
             'dqsq': dqsq,
-            'plaq': p1,
-        }
+            'plaq': p1.detach(),
+        })
 
         return xout, metrics
 
@@ -254,39 +261,46 @@ class FieldTransformation(nn.Module):
             xarr = []
 
             q = self._charges_fn(x)
-            p = self._action_fn(x)
+            p = self._plaq_fn(x)
 
             zero = torch.tensor(0., dtype=torch.float)
             onef = torch.tensor(1., dtype=torch.float)
             onei = torch.tensor(1, dtype=torch.int)
+            history = {}
 
-            history = {
-                'dt': [zero],
-                'traj': [0],
-                'acc': [onei],
-                'dh': [zero],
-                'exp_mdh': [onef],
-                'q': [q],
-                'dqsq': [0],
-                'plaq': [p],
-            }
+            #  history = {
+            #      'dt': [0.],
+            #      'traj': [0],
+            #      'acc': [],
+            #      'dh': [zero],
+            #      'exp_mdh': [onef],
+            #      'q': [q],
+            #      'dqsq': [0],
+            #      'plaq': [p],
+            #  }
             qarr = torch.zeros((self.param.ntraj, x.shape[0]),
                                requires_grad=False)
             if x is None:
                 x = self.param.initializer()
 
-            p = (-1.) * self.action(x) / (beta * volume)
-            q = qed.batch_charges(x)
-            logger.print_metrics({'plaq': p, 'q': q})
-            xarr = []
+            #  p = (-1.) * self.action(x) / (beta * volume).det
+            #  q = qed.batch_charges(x)
+            #  logger.print_metrics({'plaq': p, 'q': q})
+            #  xarr = []
 
             for i in range(1, self.param.ntraj):
                 t_ = time.time()
-                x, metrics = self.build_trajectory(x)
+                x, metrics = self.build_trajectory(x, step=i)
 
-                history['traj'].append(i)
+                #  if i == 1:
+                #      history['traj'] = [0]
+                #  else:
+                #      history['traj'].append(i)
                 qarr[i] = metrics['q']
                 for key, val in metrics.items():
+                    if isinstance(val, (list, np.ndarray, torch.Tensor)):
+                        if len(val) == 1:
+                            val = val[0]
                     try:
                         history[key].append(val)
                     except KeyError:
@@ -307,11 +321,13 @@ class FieldTransformation(nn.Module):
                     #  logger.print_metrics(history, skip=['q'], pre=pre,
                     #                       window=0)
                     pre = ['(avg)', f'traj={i}']
-                    logger.print_metrics(history, skip=['q'], pre=['(avg)'],
-                                         window=10)
+                    #  logger.print_metrics(history, skip=['q'], pre=['(avg)'],
+                    #                       window=10)
                 #logger.print_metrics(metrics, skip=['q'], pre=['(avg)'],
                 #                     window=min(i, 20))
 
             runs_history[n] = history
+            plotter.plot_history(history, self.param, therm_frac=0.0,
+                                 xlabel='Trajectory')
 
         return runs_history

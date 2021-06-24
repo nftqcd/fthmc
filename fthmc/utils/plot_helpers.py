@@ -382,7 +382,7 @@ def init_live_plot(
     }
 
 
-def moving_average(x: np.ndarray, window: int = 10):
+def moving_average(x: np.ndarray, window: int = 1):
     #  if len(x) < window:
     if len(x.shape) > 0 and x.shape[0] < window:
         return np.mean(x, keepdims=True)
@@ -397,7 +397,7 @@ def moving_average(x: np.ndarray, window: int = 10):
     return np.convolve(x, np.ones(window), 'valid') / window
 
 
-def update_plots(plots, metrics, window: int = 0):
+def update_plots(plots, metrics, window: int = 1):
     for key, val in metrics.items():
         if key in plots:
             update_plot(y=val, window=window, **plots[key])
@@ -409,7 +409,7 @@ def update_plot(
         ax: plt.Axes,
         line: list[plt.Line2D],
         display_id: DisplayHandle,
-        window: int = 0,
+        window: int = 1,
 ):
     #  if isinstance(y, torch.Tensor):
     #      if y.requires_grad_:
@@ -462,10 +462,10 @@ def update_joint_plots(
         plot_data2: LivePlotData,
         display_id: DisplayHandle,
         fig: plt.Figure = None,
-        ax1: plt.Axes = None,
-        ax2: plt.Axes = None,
+        #  ax1: plt.Axes = None,
+        #  ax2: plt.Axes = None,
         window=15,
-        alt_loss=None,
+        #  alt_loss=None,
 ):
     x1 = plot_data1.data
     x2 = plot_data2.data

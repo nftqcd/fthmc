@@ -24,8 +24,8 @@ if torch.cuda.is_available():
     torch.set_default_tensor_type(torch.cuda.FloatTensor)
 else:
     torch_device = 'cpu'
-    float_dtype = np.float64
-    torch.set_default_tensor_type(torch.DoubleTensor)
+    float_dtype = np.float32
+    torch.set_default_tensor_type(torch.FloatTensor)
 
 
 print(f'TORCH DEVICE: {torch_device}')

@@ -45,9 +45,26 @@ class BasePrior(nn.Module):
         raise NotImplementedError
 
 
-
-
 def apply_flow_to_prior(
+        prior: BasePrior,
+        coupling_layers: list[nn.Module],
+        *,
+        batch_size: int,
+        xi: torch.Tensor = None
+):
+    if xi is None:
+        xi = prior.sample_n(batch_size)
+
+    x = xi.clone().to(torch.float)
+    logq = prior.log_prob(x)
+    for layer in coupling_layers:
+        x, logJ = layer(x)
+        logq = logq - logJ
+
+    return x, xi, logq
+
+
+def apply_flow_to_prior1(
         prior: BasePrior,
         coupling_layers: list[nn.Module],
         *,
