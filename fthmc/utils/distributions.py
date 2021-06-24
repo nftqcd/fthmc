@@ -35,6 +35,17 @@ def calc_ess(logp: torch.Tensor, logq: torch.Tensor):
     return ess_per_cfg
 
 
+class BasePrior(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
+
+    def sample_n(self, n: int)  -> torch.Tensor:
+        raise NotImplementedError
+
+
 class SimpleNormal(nn.Module):
     def __init__(self, loc: torch.Tensor, var: torch.Tensor):
         self.dist = dist.normal.Normal(torch.flatten(loc), torch.flatten(var))
