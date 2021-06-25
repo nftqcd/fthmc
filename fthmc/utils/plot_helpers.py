@@ -455,6 +455,9 @@ def update_plot(
     if isinstance(y, (torch.Tensor, np.ndarray)) and len(y.shape) == 2:
         y = y.mean(-1)
 
+    if isinstance(y, torch.Tensor):
+        y = grab(y).squeeze()
+
     yavg = moving_average(np.array(y).squeeze(), window=window)
 
     #  if window > 0 and y.shape[0] > 1:

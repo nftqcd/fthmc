@@ -86,7 +86,7 @@ class FieldTransformation(nn.Module):
         self._denom = (self.param.beta * self.param.volume)
         self._charges_fn = lambda x: qed.batch_charges(x).detach()
         self._plaq_fn = lambda x: (
-            ((-1.) * self._action_fn(x) / self._denom).detach()
+            ((-1.) * self.action(x) / self._denom).detach()
         )
         action_sum = lambda x: self.action(x).sum(-1)
         self._dsdx_fn = lambda x: F.jacobian(action_sum, x)
@@ -94,8 +94,6 @@ class FieldTransformation(nn.Module):
     def action(self, x: torch.Tensor):
         z, logdet = self.flow_forward(x)
         s = self._action_fn(z) - logdet
-
-        #  return self._action_fn(z) - logdet
         return s.detach()
 
     def flow_forward(self, x: torch.Tensor):
@@ -103,7 +101,7 @@ class FieldTransformation(nn.Module):
         logdet = 0.
         for layer in self.flow:
             xi, logdet_ = layer(xi)
-            logdet = logdet + logdet_
+            logdet = logdet - logdet_
 
         return xi, logdet
 
@@ -122,7 +120,7 @@ class FieldTransformation(nn.Module):
         x.detach_()
         return dsdx
 
-    def force1(self, x: torch.Tensor, **kwargs):
+    def force_old(self, x: torch.Tensor, **kwargs):
         #  s = torch.tensor(0., requires_grad=True)
         x.requires_grad_(True)
         s = 0.
@@ -143,6 +141,13 @@ class FieldTransformation(nn.Module):
 
         return dsdx
 
+    @staticmethod
+    def wrap_old(x: torch.Tensor):
+        x = (x - PI) / TWO_PI
+
+        return TWO_PI * (x - x.floor() - 0.5)
+
+
     def _force(self, x: torch.Tensor, **kwargs):
         x.requires_grad_(True)
         s_ = self.action(x)
@@ -157,12 +162,6 @@ class FieldTransformation(nn.Module):
     def wrap(x: torch.Tensor):
         mod = lambda x: torch.remainder(x, TWO_PI)
         return mod(x + PI) - PI
-
-    @staticmethod
-    def wrap1(x: torch.Tensor):
-        x = (x - PI) / TWO_PI
-
-        return TWO_PI * (x - x.floor() - 0.5)
 
     def calc_energy(self, x: torch.Tensor, v: torch.Tensor):
         nb = x.shape[0]
@@ -214,23 +213,23 @@ class FieldTransformation(nn.Module):
         x_ = x_.reshape(x0.shape)
         #  x_ = torch.zeros(x0.shape)
         #  x_ = acc * x1 + (1 - acc) * x0
-
-        q1 = self._charges_fn(x_)
-        p1 = self._plaq_fn(x_)
-        dqsq = (q1 - q0) ** 2
         #  xout, _ = self.flow_backward(x)
         xout, _ = self.flow_forward(x_)
+
+        q1 = self._charges_fn(xout)
+        p1 = self._plaq_fn(xout)
+        dq = torch.sqrt((q1 - q0) ** 2)
         metrics.update(**{
             'dt': time.time() - t0,
             'acc': acc.float().detach(),
             'dh': dh,
             'exp_mdh': exp_mdh,
             'q': q1.to(torch.int).detach(),
-            'dqsq': dqsq.detach(),
+            'dq': dq.detach(),
             'plaq': p1.detach(),
         })
 
-        return xout, metrics
+        return xout.detach(), metrics
 
 
     def run(
@@ -238,7 +237,6 @@ class FieldTransformation(nn.Module):
             x: torch.Tensor = None,
             nprint: int = 1,
             nplot: int = 1,
-            window: int = 0,
             **kwargs,
             #  dpi: int = 120,
             #  figsize: tuple = None,
@@ -248,30 +246,24 @@ class FieldTransformation(nn.Module):
             #  x = x[None, :]
             #  x = x[None, :]
 
-        nb = x.shape[0]
+        #  nb = x.shape[0]
         runs_history = {}
-        beta = self.param.beta
-        volume = self.param.volume
-        #  if figsize is None:
-        #      figsize = (8, 2.75)
 
-        ylabels = ['acc', 'dqsq', 'plaq']
+        ylabels = ['acc', 'dq', 'plaq']
         xlabels = len(ylabels) * ['trajectory']
-        plots = init_live_plots(self.param,
-                                xlabels=xlabels,
+        plots = init_live_plots(self.param, xlabels=xlabels,
                                 ylabels=ylabels, **kwargs)
 
         for n in range(self.param.nrun):
             t0 = time.time()
-            xarr = []
+            #  xarr = []
 
-            q = self._charges_fn(x)
-            p = self._plaq_fn(x)
+            #  q = self._charges_fn(x)
+            #  p = self._plaq_fn(x)
 
-            zero = torch.tensor(0., dtype=torch.float)
-            onef = torch.tensor(1., dtype=torch.float)
-            onei = torch.tensor(1, dtype=torch.int)
-            history = {}
+            #  zero = torch.tensor(0., dtype=torch.float)
+            #  onef = torch.tensor(1., dtype=torch.float)
+            #  onei = torch.tensor(1, dtype=torch.int)
 
             #  history = {
             #      'dt': [0.],
@@ -283,8 +275,13 @@ class FieldTransformation(nn.Module):
             #      'dqsq': [0],
             #      'plaq': [p],
             #  }
-            qarr = torch.zeros((self.param.ntraj, x.shape[0]),
-                               requires_grad=False)
+            history = {}
+            scalar_zeros = torch.zeros(self.param.ntraj, requires_grad=False)
+            batch_zeros = torch.zeros((self.param.ntraj, x.shape[0]),
+                                      requires_grad=False)
+            qarr = batch_zeros.clone()
+            #  qarr = torch.zeros((self.param.ntraj, x.shape[0]),
+            #                     requires_grad=False)
             if x is None:
                 x = self.param.initializer()
 
@@ -313,7 +310,7 @@ class FieldTransformation(nn.Module):
 
                 if (i - 1) % nplot == 0:
                     data = {
-                        'dqsq': history['dqsq'],
+                        'dq': history['dq'],
                         'acc': history['acc'],
                         'plaq': history['plaq'],
                     }
