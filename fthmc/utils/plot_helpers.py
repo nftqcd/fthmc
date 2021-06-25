@@ -23,7 +23,6 @@ EXT = (
 logger = io.Logger()
 
 PathLike = Union[str, Path]
-Metric = Union[list, np.ndarray, torch.Tensor]
 
 
 @dataclass
@@ -44,8 +43,9 @@ def torch_delete(x: torch.Tensor, indices: torch.Tensor):
     mask[indices] = False
     return x[mask]
 
+
 def therm_arr(
-        x: Union[list, np.ndarray, torch.Tensor],
+        x: Union[np.ndarray, torch.Tensor],
         therm_frac: float = 0.1,
         ret_steps: bool = True
 ):
@@ -54,9 +54,6 @@ def therm_arr(
     num_steps = x.shape[taxis]
     therm_steps = int(therm_frac * num_steps)
     x = x[therm_steps:]
-    #  if isinstance(x, torch.Tensor):
-    #      x = torch_delete(x, torch.arange(therm_steps)
-    #  x = np.delete(x, np.s_[:therm_steps], axis=taxis)
     t = np.arange(therm_steps, num_steps)
     if ret_steps:
         return x, t
@@ -79,7 +76,7 @@ def list_to_arr(x: list):
 
 def savefig(
         fig: plt.Figure,
-        outfile: str,
+        outfile: PathLike,
         dpi: int = 500,
         verbose: bool = True
 ):
@@ -108,8 +105,10 @@ def save_live_plots(plots: dict[str, dict], outdir: PathLike):
             continue
 
 
+ArrayLike = Union[np.ndarray, torch.Tensor]
+
 def plot_metric(
-        metric: Metric,
+        metric: Union[ArrayLike, list],
         title: str = None,
         xlabel: str = None,
         ylabel: str = None,
@@ -126,34 +125,54 @@ def plot_metric(
     if figsize is None:
         figsize = (4, 3)
 
-    if isinstance(metric, list):
-        if isinstance(metric[0], tuple) and len(metric[0]) == 1:
-            metric = [grab(m[0]) for m in metric]
+    if not isinstance(metric, (list, np.ndarray, torch.Tensor)):
+        raise ValueError('metric must be one of '
+                         '`list`, `np.ndarray`  or `torch.Tensor`')
 
-    if isinstance(metric, list) and isinstance(metric[0], torch.Tensor):
-        metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
+    #  if isinstance(metric, list):
+    #      if isinstance(metric[0], tuple) and len(metric[0]) == 1:
+    #          m = np.
+    #          metric = grab(torch.tensor([grab(m[0]) for m in metric]))
+    x = metric
+    if isinstance(x, list):
+        if isinstance(x[0], torch.Tensor):
+            x = grab(torch.Tensor(torch.stack(x))).squeeze()
+        elif isinstance(x[0], np.ndarray):
+            x = np.stack(x).squeeze()
 
-    if isinstance(metric, torch.Tensor):
-        metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
+    elif isinstance(x, torch.Tensor):
+        x = grab(x).squeeze()
 
-    metric = np.array(metric)
+    else:
+        try:
+            x = np.array(x)
+        except:
+            raise ValueError('Unable to parse metric.')
+
+    #  if isinstance(metric, list) and isinstance(metric[0], torch.Tensor):
+    #      metric = grab(torch.Tensor(metric)).squeeze()
+    #
+    #  if isinstance(metric, torch.Tensor):
+    #      metric = grab(torch.Tensor(metric)).squeeze()
+
+    #  metric = np.array(metric)
     if thin > 0:
-        metric = metric[::thin]
+        x = x[::thin]
 
-    metric, steps = therm_arr(metric, therm_frac, ret_steps=True)
+    x, steps = therm_arr(x, therm_frac, ret_steps=True)
 
     fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
-    if len(metric.squeeze().shape) == 1:
+    if len(x.squeeze().shape) == 1:
         label = kwargs.pop('label', None)
-        ax.plot(steps, metric, label=label, **kwargs)
+        ax.plot(steps, x, label=label, **kwargs)
 
-    if len(metric.squeeze().shape) == 2:
+    if len(x.squeeze().shape) == 2:
         for idx in range(num_chains):
-            y = metric[:, idx]
+            y = x[:, idx]
             ax.plot(steps, y, **kwargs)
 
     if hline:
-        avg = np.mean(metric)
+        avg = np.mean(x)
         label = f'avg: {avg:.4g}'
         ax.axhline(avg, label=label, **kwargs)
 
@@ -175,7 +194,8 @@ def plot_metric(
 
 
 def plot_history(
-        history: dict[str, Union[list, torch.Tensor, np.ndarray]],
+        #  history: dict[str, Union[list, torch.Tensor, np.ndarray]],
+        history: dict[str, list],
         param: Param,
         therm_frac: float = 0.0,
         config: TrainConfig = None,
@@ -193,15 +213,28 @@ def plot_history(
         if skip is not None and key in skip:
             continue
 
+        if isinstance(val[0], np.ndarray):
+            vt = np.stack(val)
+
+        elif isinstance(val[0], torch.Tensor):
+            vt = grab(torch.stack(val)).squeeze()
+        else:
+            try:
+                vt = grab(torch.tensor(val, dtype=torch.float)).squeeze()
+            except:
+                vt = grab(torch.Tensor(torch.stack(val).to(torch.float)))
+            finally:
+                vt = np.array(val)
+
         outfile = None
         if outdir is not None:
             outfile = os.path.join(outdir, f'{key}.{EXT}')
 
         if title is None:
             tarr = get_title(param, config)
-            title = '\n'.join(tarr) if len(tarr) > 0 else None
+            title = '\n'.join(tarr) if len(tarr) > 0 else ''
 
-        _ = plot_metric(val,
+        _ = plot_metric(vt,
                         ylabel=key,
                         title=title,
                         xlabel=xlabel,
@@ -217,108 +250,87 @@ def plot_history(
         plt.show()
 
 
+
+yLabel = list[str]
+yLabels = list[yLabel]
+
+
 def init_plots(
-        config: TrainConfig,
-        param: Param,
-        dpi: int = 120,
-        figsize: tuple = None,
+        config: TrainConfig = None,
+        param: Param = None,
+        ylabels: yLabels = None,
+        **kwargs,
 ):
-    plots_dqsq = {}
-    plots_dkl = {}
-    plots_ess = {}
-    colors_rb = ['C0', 'C1']
-    colors_gp = ['C2', 'C3']
-    colors_yp = ['C4', 'C9']
     #  colors_rb = ['#00CCFF', '#f92672']
     #  colors_gp = ['#66ff66', '#ff5fff']
-    colors_yp = ['#ffff78', '#cc78fa']
-    #  plots_force = {}
-    if figsize is None:
-        figsize = (8, 3)
-
+    #  colors_yp = ['#ffff78', '#cc78fa']
+    plots_dkl = None
+    plots_ess = None
     if in_notebook:
-        #  plots_dqsq = init_live_plot(figsize=figsize, dpi=dpi,
-        #                              param=param, config=config,
-        #                              ylabel='dqsq', xlabel='Epoch')
+        if ylabels is None:
+            ylabels = [['loss_dkl', 'ESS'], ['dq', 'ESS']]
 
-        ylabel_dkl = ['loss_dkl', 'ESS']
-        plots_dkl = init_live_joint_plots(
-            config.n_era, config.n_epoch,
-            figsize=figsize, use_title=True,
-            param=param, config=config,
-            colors=colors_rb, ylabel=ylabel_dkl
-        )
-        ylabel_ess = ['dqsq', 'ess']
-        plots_ess = init_live_joint_plots(
-            config.n_era, config.n_epoch,
-            figsize=figsize, colors=colors_gp,
-            param=param, config=config, ylabel=ylabel_ess
-        )
+        c0 = ['C0', 'C1']
+        plots_dkl = init_live_joint_plots(ylabels=ylabels[0], param=param,
+                                          config=config, colors=c0, **kwargs)
+        c1 = ['C2', 'C3']
+        plots_ess = init_live_joint_plots(ylabels=ylabels[1], param=param,
+                                          config=config, colors=c1, **kwargs)
 
-        #  if config.with_force:
-        #      ylabel_force = ['loss_force', 'ESS']
-        #      plots_force = init_live_joint_plots(config.n_era,
-        #                                          config.n_epoch,
-        #                                          figsize=figsize,
-        #                                          param=param,
-        #                                          config=config,
-        #                                          ylabel=ylabel_force)
-
-    return {
-        'dqsq': plots_dqsq,
-        'dkl': plots_dkl,
-        #  'force': plots_force,
-        'ess': plots_ess,
-    }
+    return {'dkl': plots_dkl, 'ess': plots_ess}
 
 
 def init_live_joint_plots(
-        n_era: int,
-        n_epoch: int,
+        ylabels: list[str],
+        #  n_era: int = None,
+        #  n_epoch: int = None,
         dpi: int = 120,
         figsize: tuple = None,
         param: Param = None,
         config: TrainConfig = None,
         xlabel: str = None,
-        ylabel: list[str] = None,
         colors: list[str] = None,
         use_title: bool = False,
         set_xlim: bool = False,
 ):
+    if use_title or set_xlim:
+        assert param is not None or config is not None
+
     if colors is None:
-        colors = ['#00CCFF', '#f92672']
+        n = np.random.randint(10, size=2)
+        colors = [f'C{n[0]}', f'C{n[1]}']
+        #  colors = ['C0', 'C1']
+        #  colors = ['#00CCFF', '#f92672']
         #colors = ['#66ff66', '#ff5fff']
         #colors = ['#ffff78', '#cc78fa']
 
     if figsize is None:
         figsize = (8 ,3)
-    #  sns.set_style('ticks')
+
     fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
                             constrained_layout=True)
-    if set_xlim:
-        plt.xlim(0, n_era * n_epoch)
+
+    ax1 = ax0.twinx()
 
     line0 = ax0.plot([0], [0], alpha=0.9, c=colors[0])
-    ax1 = ax0.twinx()
-    if ylabel is None:
-        ax0.set_ylabel('Loss', color=colors[0])
-        ax1.set_ylabel('ess', color=colors[1])
-
-    else:
-        ax0.set_ylabel(ylabel[0], color=colors[0])
-        ax1.set_ylabel(ylabel[1], color=colors[1])
-
-    ax0.tick_params(axis='y', labelcolor=colors[0])
-    ax0.grid(False)
-
     line1 = ax1.plot([0], [0], alpha=0.9, c=colors[1])  # dummy
+
+    ax0.set_ylabel(ylabels[0], color=colors[0])
+    ax1.set_ylabel(ylabels[1], color=colors[1])
 
     ax0.tick_params(axis='y', labelcolor=colors[0])
     ax1.tick_params(axis='y', labelcolor=colors[1])
+
+    ax0.grid(False)
     ax1.grid(False)
     ax0.set_xlabel('Epoch' if xlabel is None else xlabel)
 
+    if set_xlim:
+        assert config is not None
+        plt.xlim(0, config.n_era * config.n_epoch)
+
     if use_title:
+        assert config is not None or param is not None
         title = get_title(param, config)
         if len(title) > 0:
             fig.suptitle('\n'.join(title))
@@ -404,7 +416,7 @@ def update_plots(plots, metrics, window: int = 1):
 
 
 def update_plot(
-        y: Metric,
+        y: ArrayLike,
         fig: plt.Figure,
         ax: plt.Axes,
         line: list[plt.Line2D],
@@ -422,17 +434,25 @@ def update_plot(
     #      y = np.array(y)
 
     if isinstance(y, list):
-        if isinstance(y[0], tuple) and len(y[0]) == 1:
-            y = [grab(m[0]) for m in y]
-
-        if isinstance(y[0], torch.Tensor):
+        try:
+            y = torch.tensor(y)
+        except:
             y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
-            #  y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
+            #  try:
+            #  except:
+            #      try:
+            #          y = [grab(m[0]) for m in y]
+        #  if isinstance(y[0], tuple) and len(y[0]) == 1:
+        #      y = [grab(m[0]) for m in y]
+        #
+        #  if isinstance(y[0], torch.Tensor):
+        #      y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
+        #      #  y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
 
     #  if isinstance(y, torch.Tensor):
     #      y = torch.Tensor(y).detach().cpu().numpy().squeeze()
 
-    if len(y.shape) == 2:
+    if isinstance(y, (torch.Tensor, np.ndarray)) and len(y.shape) == 2:
         y = y.mean(-1)
 
     yavg = moving_average(np.array(y).squeeze(), window=window)

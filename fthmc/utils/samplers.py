@@ -10,12 +10,13 @@ from fthmc.utils.distributions import calc_dkl, calc_ess
 import fthmc.utils.qed_helpers as qed
 
 import torch.nn as nn
-from fthmc.utils.distributions import bootstrap
+from fthmc.utils.distributions import bootstrap, BasePrior
 from fthmc.utils.logger import Logger
 
 
-NumpyFloat = Union[np.float16, np.float32, np.float64]
-NumpyObject = Union[np.ndarray, NumpyFloat]
+#  NumpyFloat = Union[np.float64, np.float32, np.float64]
+#  NumpyFlow = np.float
+NumpyObject = Union[np.ndarray, np.float]
 TensorLike = Union[list, NumpyObject, torch.Tensor]
 
 logger = Logger()
@@ -34,20 +35,9 @@ def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
 
 
-class BasePrior(nn.Module):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-    def log_prob(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
-    def sample_n(self, n: int)  -> torch.Tensor:
-        raise NotImplementedError
-
-
 def apply_flow_to_prior(
         prior: BasePrior,
-        coupling_layers: list[nn.Module],
+        coupling_layers: nn.ModuleList,
         *,
         batch_size: int,
         xi: torch.Tensor = None
@@ -87,7 +77,7 @@ ActionFn = Callable[[float], torch.Tensor]
 
 def generate_ensemble(
         model: nn.Module,
-        action: ActionFn = qed.BatchAction,
+        action: ActionFn,
         ensemble_size: int = 1024,
         batch_size: int = 64,
         nboot: int = 100,
