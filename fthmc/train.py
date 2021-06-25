@@ -50,13 +50,6 @@ class qedMetrics:
             'charge': self.charge
         }
 
-#  class FlowModel(nn.Module):
-#      def __init__(self, prior: BasePrior, layers: nn.ModuleList):
-#          super().__init__()
-#          self.prior = prior
-#          self.layers = layers
-
-
 
 def grab(x: torch.Tensor):
     return x.detach().cpu().numpy()
@@ -66,27 +59,13 @@ def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
 
 
-def list_to_tensor(x: list[torch.Tensor]):
+def list_to_tensor(x: list[Union[torch.Tensor, np.ndarray]]):
+    if isinstance(x[0], torch.Tensor):
+        return torch.Tensor(torch.stack(x)).squeeze()
+    if isinstance(x[0], np.ndarray):
+        return torch.from_numpy(np.stack(x)).squeeze()
+
     return torch.tensor([grab(torch.stack(i)) for i in x])
-
-
-def get_observables(param: Param, x: torch.Tensor):
-    x.squeeze()
-    if len(x.shape) == 4:
-        d = x.shape[1]
-        plaq = qed.batch_plaqs(x, 0, 1)
-        charge = qed.batch_charges(plaqs=plaq)
-        action = torch.sum(torch.cos(plaq), dim=(tuple(range(1, d+1))))
-        action /= param.volume
-    else:
-        plaq = qed.plaq_phase(x)
-        plaqsum = torch.sum(torch.cos(qed.plaq_phase(x)))
-        action = plaqsum / param.volume
-
-        action = (-param.beta) * plaqsum / (-param.beta * param.volume)
-        charge = qed.topo_charge(x[None, :]).to(torch.int)
-
-    return qedMetrics(param=param, plaq=plaq, charge=charge)
 
 
 def get_model(param: Param, config: TrainConfig):
@@ -169,7 +148,8 @@ def running_averages(
     return avgs
 
 
-ActionFn = Callable[[float], torch.Tensor]
+#  ActionFn = Callable[[float], torch.Tensor]
+ActionFn = Callable[[torch.Tensor], torch.Tensor]
 #  Model = dict[str, Union[nn.Module, nn.ModuleList]]
 
 
@@ -217,7 +197,7 @@ def train_step(
     qi = qed.batch_charges(xi)
     q = qed.batch_charges(x)
     plaq = logp / (param.beta * param.volume)
-    dqsq = (q - qi) ** 2
+    dq = torch.sqrt((q - qi) ** 2)
 
     loss_dkl = dkl_factor * dkl
     if scaler is not None:
@@ -231,19 +211,17 @@ def train_step(
     if scheduler is not None:
         scheduler.step(loss_dkl)
 
-    batch_metrics = {
+    metrics = {
         'dt': time.time() - t0,
         'ess': grab(ess),
         'loss_dkl': grab(loss_dkl),
-        #  'logp': grab(logp),
-        #  'logq': grab(logq),
         'q': grab(q),
-        'dqsq': grab(dqsq),
+        'dq': grab(dq.mean(-1)),
         'plaq': grab(plaq),
     }
 
+    return metrics
 
-    return batch_metrics
 
 PlotData = plotter.LivePlotData
 
@@ -266,6 +244,13 @@ def train(
     if figsize is None:
         figsize = (4, 3)
 
+    # ---------------------------------------------------------------
+    # TODO: Initialize elements of history as `torch.empty(...)` to
+    # pre-allocate space for holding history, then accumulate as
+    # history[key][era, epoch] = metric
+    #
+    # Duplicate approach to `FieldTransformation.run` method as well
+    # ---------------------------------------------------------------
     if history is None:
         history = {}
 
@@ -277,8 +262,6 @@ def train(
 
     model.prior.to(device)
     model.layers.to(device)
-    #  model['prior'].to(device)
-    #  model['layers'].to(device)
 
     logdir = io.get_logdir(param, config)
     train_dir = os.path.join(logdir, 'training')
@@ -296,15 +279,12 @@ def train(
     u1_action = qed.BatchAction(param.beta)
 
     optimizer = optim.AdamW(model.layers.parameters(),
-                            lr=config.base_lr, weight_decay=weight_decay)
-    #  scheduler = None
+                            lr=config.base_lr,
+                            weight_decay=weight_decay)
     scheduler = None
     if scheduler_config is not None:
         schcfg = asdict(scheduler_config)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, **schcfg)
-                                                     #  factor=0.98,
-                                                     #  mode='min', #patience=500,
-                                                     #  min_lr=1e-5, verbose=True)
 
     logger.log(f'Scheduler created!')
 
@@ -319,17 +299,20 @@ def train(
     #      optimizer = optimizer_force
 
     interactive = logging.in_notebook()
-    plots = {}
+    plots = None
     if interactive:
         plots = plotter.init_plots(config, param, dpi=dpi, figsize=figsize)
 
-    dt = 0.0
     step = 0
-    #  line = (io.WIDTH // 4) * '-'
-    print_freq = min((config.print_freq, config.n_epoch))
-    plot_freq = min((config.plot_freq, config.n_epoch))
-    ckpt_files = []
+    dt = 0.0
     skip = ['q']
+    ckpt_files = []
+
+    pre = lambda epoch: [f'epoch: {epoch}']
+
+    plot_freq = min((config.plot_freq, config.n_epoch))
+    print_freq = min((config.print_freq, config.n_epoch))
+
     for era in range(config.n_era):
         t0 = time.time()
         estr = f'ERA={era}, last took: {int(dt // 60)} min {dt%60:.4g} sec'
@@ -342,10 +325,10 @@ def train(
                                  action=u1_action,
                                  optimizer=optimizer,
                                  batch_size=config.batch_size,
-                                 #  with_force=config.with_force,
                                  scheduler=scheduler,
                                  pre_model=pre_model,
                                  dkl_factor=dkl_factor)
+                                 #  with_force=config.with_force,
                                  #  force_factor=force_factor)
 
             #  if config.with_force:
@@ -358,8 +341,6 @@ def train(
             #                           dkl_factor=dkl_factor,
             #                           force_factor=force_factor)
 
-            step_info = {'epoch': int(epoch+3)}  # , 'step': int(step+2)}
-            #  history = update_history(history, metrics, extras=step_info)
             for k, v in metrics.items():
                 if k in skip:
                     continue
@@ -368,28 +349,19 @@ def train(
                 except KeyError:
                     history[k] = [v]
 
-            skip = ['q']
-            pre = [f'epoch: {epoch}']
             win = min(epoch, 20)
             if step % print_freq == 0:
                 #  running_avgs = running_averages(history, win, False)
                 logger.print_metrics(metrics,
                                      skip=skip,
-                                     pre=['(now)', *pre])
+                                     pre=['(now)', *pre(epoch)])
 
                 logger.print_metrics(history,
                                      skip=skip,
                                      window=win,
-                                     pre=['(avg)', *pre])
+                                     pre=['(avg)', *pre(epoch)])
 
-            if step % plot_freq == 0 and interactive:
-                dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
-                #  plotter.update_plot(y=dqsq_avg,
-                #                      ax=plots['dqsq']['ax'],
-                #                      fig=plots['dqsq']['fig'],
-                #                      line=plots['dqsq']['line'],
-                #                      display_id=plots['dqsq']['display_id'])
-
+            if step % plot_freq == 0 and plots is not None:
                 epdata = PlotData(history['ess'],
                                   plots['dkl']['plot_obj2'])
                 lpdata = PlotData(history['loss_dkl'],
@@ -398,23 +370,12 @@ def train(
                 plotter.update_joint_plots(lpdata, epdata,
                                            fig=plots['dkl']['fig'],
                                            display_id=plots['dkl']['display_id'])
-                dqdata = PlotData(dqsq_avg,
+                dqdata = PlotData(history['dq'],
                                   plots['ess']['plot_obj1'])
                 eqdata = PlotData(history['ess'], plots['ess']['plot_obj2'])
                 plotter.update_joint_plots(dqdata, eqdata,
                                            fig=plots['ess']['fig'],
                                            display_id=plots['ess']['display_id'])
-                #  dq = np.array(history['dq'])[-window:]
-                #  plot_metrics = {
-                #      'dqsq': history['dqsq'],
-                #      'loss_dkl': history['loss'],
-                #      'ess': history['ess'],
-                #  }
-                #  pavgs = running_averages(plot_metrics,
-                #                           n_epochs=min(epoch, 5))
-                #  dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
-                #  window = min(epoch, 5)
-
                 #  if config.with_force:
                 #      epdata = PlotData(history['ess'],
                 #                        plots['force']['plot_obj2'])
@@ -440,7 +401,9 @@ def train(
                                    outdir=dirs['ckpts'],
                                    optimizer=optimizer)
 
-    plotter.save_live_plots(plots, dirs['plots'])
+    if plots is not None:
+        plotter.save_live_plots(plots, dirs['plots'])
+
     plotter.plot_history(history, param=param, config=config,
                          skip=['epoch', 'step'],
                          num_chains=2, thin=0,
@@ -476,6 +439,5 @@ def transfer_to_new_lattice(
     prior = MultivariateUniform(torch.zeros((2, *param.lat)),
                                 TWO_PI * torch.ones(tuple(param.lat)))
     model = FlowModel(prior=prior, layers=flow)
-    #  {'layers': flow, 'prior': prior}
 
     return {'param': param, 'model': model}

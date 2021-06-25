@@ -10,7 +10,7 @@ from functools import reduce
 import os
 from dataclasses import dataclass, field
 from math import pi as PI
-from typing import Callable, Union
+from typing import Callable
 
 #  import matplotlib.pyplot as plt
 import numpy as np
@@ -52,7 +52,9 @@ def list_to_arr(x: list):
 @dataclass
 class FlowModel:
     prior: BasePrior
-    layers: Union[torch.nn.ModuleList, list[torch.nn.Module]]
+    #  layers: Union[torch.nn.ModuleList, list[torch.nn.Module]]
+    layers: torch.nn.ModuleList
+
 
 
 @dataclass

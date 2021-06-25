@@ -4,7 +4,7 @@ hmc.py
 from __future__ import absolute_import, print_function, division, annotations
 
 from fthmc.utils.plot_helpers import init_live_plot, plot_history, update_plots
-from fthmc.config import LOGS_DIR, TrainConfig
+from fthmc.config import LOGS_DIR
 import os
 import torch
 from fthmc.config import Param
@@ -13,7 +13,7 @@ from fthmc.utils.logger import Logger, check_else_make_dir, in_notebook, savez
 import time
 
 import fthmc.utils.qed_helpers as qed
-from fthmc.train import get_observables  # , update_history
+#  from fthmc.train import get_observables  # , update_history
 from math import pi as PI
 
 
@@ -47,13 +47,14 @@ def init_live_plots(
 
     return plots
 
+
 def run_hmc(
         param: Param,
         x: torch.Tensor = None,
         #  keep_fields: bool = True,
         plot_metrics: bool = True,
-        colors: list = None,
-        nprint: int = 1,
+        #  colors: list = None,
+        #  nprint: int = 1,
         nplot: int = 10,
 ):
     """Run generic HMC.
@@ -75,7 +76,7 @@ def run_hmc(
     histories = {}
     run_times = []
     fields_arr = []
-    ylabels = ['acc', 'dqsq', 'plaq']
+    ylabels = ['acc', 'dq', 'plaq']
     xlabels = len(ylabels) * ['trajectory']
     plots = init_live_plots(param=param,  # config=config,
                             xlabels=xlabels, ylabels=ylabels)
@@ -114,7 +115,7 @@ def run_hmc(
             'acc': [torch.tensor(1.)],
             'dH': [torch.tensor(0.)],
             'q': [q],
-            'dqsq': [torch.tensor(0)],
+            'dq': [0],
             'plaq': [p],
         }
         for i in range(param.ntraj):
@@ -123,7 +124,7 @@ def run_hmc(
 
             qold = history['q'][-1]
             qnew = qed.batch_charges(x)
-            dqsq = (int(qnew) - int(qold)) ** 2
+            dq = torch.sqrt((qnew - qold) ** 2)
 
             plaq = (-1.) * action(x) / (param.beta * param.volume)
 
@@ -135,7 +136,7 @@ def run_hmc(
                 'acc': acc,  # 'True' if acc else 'False',
                 'dH': dH,
                 'q': int(qnew),
-                'dqsq': dqsq,
+                'dq': dq,
                 'plaq': plaq,
             }
             for k, v in metrics.items():
@@ -150,7 +151,7 @@ def run_hmc(
 
             if in_notebook() and i % nplot == 0:
                 data = {
-                    'dqsq': history['dqsq'],
+                    'dq': history['dq'],
                     'acc': history['acc'],
                     'plaq': history['plaq'],
                 }
