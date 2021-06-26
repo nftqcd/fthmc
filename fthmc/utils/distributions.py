@@ -61,8 +61,6 @@ class SimpleNormal(BasePrior):
         return x.reshape(batch_size, *self.shape)
 
 
-#  Scalar = Union[np.float, torch.float, float, int]
-
 class MultivariateUniform(BasePrior):
     """Uniformly draw samples from [a, b]."""
     def __init__(self, a: torch.Tensor, b: torch.Tensor):
