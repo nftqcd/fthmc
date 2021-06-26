@@ -17,12 +17,28 @@ import numpy as np
 import torch
 import torch.nn
 
-from fthmc.utils.logger import Logger, get_timestamp
-from fthmc.utils.distributions import BasePrior
-
 __author__ = 'Sam Foreman'
 __date__ = '05/23/2021'
 
+
+if torch.cuda.is_available():
+    DEVICE = 'cuda'
+    npDTYPE = np.float32
+    torch.set_default_tensor_type(torch.cuda.FloatTensor)
+else:
+    DEVICE = 'cpu'
+    npDTYPE = np.float64
+    torch.set_default_tensor_type(torch.DoubleTensor)
+
+
+from fthmc.utils.logger import Logger, get_timestamp
+from fthmc.utils.distributions import BasePrior
+
+logger = Logger()
+DTYPE = torch.get_default_dtype()
+
+logger.log(f'TORCH DEVICE: {DEVICE}')
+logger.log(f'TORCH DTYPE: {DTYPE}')
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS_DIR = os.path.join(PROJECT_DIR, 'logs')
@@ -35,11 +51,11 @@ RED = '#ff4050'
 NOW = get_timestamp('%Y-%m-%d-%H%M%S')
 METRIC_NAMES = ['dt', 'accept', 'traj', 'dH', 'expdH', 'plaq', 'charge']
 
-logger = Logger()
 TWO_PI = 2 * PI
 
 
 LossFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+
 
 def grab(x: torch.Tensor):
     return x.detach().cpu().numpy()

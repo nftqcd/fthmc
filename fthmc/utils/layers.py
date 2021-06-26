@@ -15,24 +15,16 @@ import numpy as np
 import packaging.version
 import torch
 import torch.nn as nn
+from math import pi as PI
 
 from fthmc.utils.qed_helpers import compute_u1_plaq
+from fthmc.config import DEVICE, DTYPE, npDTYPE
 
-if torch.cuda.is_available():
-    torch_device = 'cuda'
-    float_dtype = np.float32
-    torch.set_default_tensor_type(torch.cuda.FloatTensor)
-else:
-    torch_device = 'cpu'
-    float_dtype = np.float32
-    torch.set_default_tensor_type(torch.FloatTensor)
-
-
-print(f'TORCH DEVICE: {torch_device}')
+TWO_PI = 2 * PI
 
 
 def torch_mod(x: torch.Tensor):
-    return torch.remainder(x, 2*np.pi)
+    return torch.remainder(x, TWO_PI)
 
 
 def torch_wrap(x: torch.Tensor):
@@ -137,7 +129,7 @@ def gauge_transform(links, alpha):
 
 def random_gauge_transform(x):
     Nconf, VolShape = x.shape[0], x.shape[2:]
-    return gauge_transform(x, 2*np.pi*torch.rand((Nconf,) + VolShape))
+    return gauge_transform(x, TWO_PI * torch.rand((Nconf,) + VolShape))
 
 
 class GaugeEquivCouplingLayer(nn.Module):
@@ -189,7 +181,7 @@ def make_2d_link_active_stripes(shape, mu, off):
 
     nu = 1 - mu
     mask = np.roll(mask, off, axis=nu+1)
-    return torch.from_numpy(mask.astype(float_dtype)).to(torch_device)
+    return torch.from_numpy(mask.astype(npDTYPE)).to(DEVICE)
 
 
 def make_single_stripes(shape, mu, off):
@@ -211,7 +203,7 @@ def make_single_stripes(shape, mu, off):
     elif mu == 1:
         mask[0::4] = 1
     mask = np.roll(mask, off, axis=1-mu)
-    return torch.from_numpy(mask).to(torch_device)
+    return torch.from_numpy(mask).to(DEVICE)
 
 def make_double_stripes(shape, mu, off):
     """
@@ -236,7 +228,7 @@ def make_double_stripes(shape, mu, off):
         mask[0::4] = 1
         mask[1::4] = 1
     mask = np.roll(mask, off, axis=1-mu)
-    return torch.from_numpy(mask).to(torch_device)
+    return torch.from_numpy(mask).to(DEVICE)
 
 
 def make_plaq_masks(mask_shape, mask_mu, mask_off):
@@ -246,7 +238,7 @@ def make_plaq_masks(mask_shape, mask_mu, mask_off):
     mask['passive'] = 1 - mask['frozen'] - mask['active']
     return mask
 
-def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=2*np.pi):
+def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=TWO_PI):
     min_x = a*torch.ones_like(y)
     max_x = b*torch.ones_like(y)
     min_val = f(min_x)
