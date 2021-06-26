@@ -11,7 +11,7 @@ import torch
 from IPython.display import DisplayHandle, display
 
 import fthmc.utils.io as io
-from fthmc.config import Param, TrainConfig
+from fthmc.config import Param, TrainConfig, DTYPE
 from fthmc.utils.logger import in_notebook
 
 MPL_BACKEND = os.environ.get('MPLBACKEND', None)
@@ -220,9 +220,9 @@ def plot_history(
             vt = grab(torch.stack(val)).squeeze()
         else:
             try:
-                vt = grab(torch.tensor(val, dtype=torch.float)).squeeze()
+                vt = grab(torch.tensor(val, dtype=DTYPE)).squeeze()
             except:
-                vt = grab(torch.Tensor(torch.stack(val).to(torch.float)))
+                vt = grab(torch.Tensor(torch.stack(val).to(DTYPE)))
             finally:
                 vt = np.array(val)
 

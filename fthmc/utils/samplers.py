@@ -12,6 +12,7 @@ import fthmc.utils.qed_helpers as qed
 import torch.nn as nn
 from fthmc.utils.distributions import bootstrap, BasePrior
 from fthmc.utils.logger import Logger
+from fthmc.config import DTYPE
 
 
 #  NumpyFloat = Union[np.float64, np.float32, np.float64]
@@ -45,7 +46,7 @@ def apply_flow_to_prior(
     if xi is None:
         xi = prior.sample_n(batch_size)
 
-    x = xi.clone().to(torch.float)
+    x = xi.clone().to(DTYPE)
     logq = prior.log_prob(x)
     for layer in coupling_layers:
         x, logJ = layer(x)
