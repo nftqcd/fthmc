@@ -50,7 +50,7 @@ TensorArrayLike = "Union[TensorList, TensorTuple, torch.Tensor]"
 Scalar = "Union[int, bool, float]"
 
 
-def moving_average(x: torch.Tensor, window: int = 10):
+def moving_average1(x: torch.Tensor, window: int = 10):
     if len(x.shape) > 0 and x.shape[0] < window:
         #  return x.mean(keepdim=True)
         return np.mean(x, keepdims=True)
@@ -61,7 +61,7 @@ def moving_average(x: torch.Tensor, window: int = 10):
 
 ArrayLike = Union[list, np.ndarray, torch.Tensor]
 
-def running_average(x: ArrayLike, window: int = 10):
+def running_average1(x: ArrayLike, window: int = 10):
     if isinstance(x, torch.Tensor):
         x = grab(x)
 
@@ -77,6 +77,20 @@ def running_average(x: ArrayLike, window: int = 10):
         avgd = x.mean()
 
     return avgd
+
+
+def moving_average(x: Union[np.ndarray, torch.Tensor], window: int = 0):
+    if len(x.shape) > 0:
+        x = x[-window:].mean(-1)
+
+    if len(x.shape) > 0 and x.shape[0] < window or window == 0:
+        return np.mean(x, keepdims=True)
+        #  return x.mean(keepdims=True)
+
+    try:
+        return np.convolve(x, np.ones(window), 'valid') / window
+    except:
+        return np.convolve(np.stack(x), np.ones(window), 'valid') / window
 
 
 def strformat(
@@ -113,7 +127,8 @@ def strformat(
         else:
             v = np.array(v)
 
-        avgd = running_average(v, window)
+        #  avgd = running_average(v, window)
+        avgd = moving_average(v, window)
 
         #  if window > 0 and len(v.shape) > 0:
         #      if v.shape[0] < window:
@@ -129,7 +144,7 @@ def strformat(
         #  else:
         #      avgd = v.mean()
         #
-        return f'{str(k)}={avgd:<4.3f}'
+        return f'{str(k)}={avgd.mean():<4.3f}'
 
     try:
         return f'{str(k)}={v:<3g}'
