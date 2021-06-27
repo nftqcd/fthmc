@@ -1,9 +1,14 @@
+"""
+plot_helpers.py
+
+Contains helper functions for plotting metrics.
+"""
 from __future__ import absolute_import, annotations, division, print_function
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, List, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -23,6 +28,8 @@ EXT = (
 logger = io.Logger()
 
 PathLike = Union[str, Path]
+
+# pylint:disable=missing-function-docstring,invalid-name
 
 
 @dataclass
@@ -194,7 +201,6 @@ def plot_metric(
 
 
 def plot_history(
-        #  history: dict[str, Union[list, torch.Tensor, np.ndarray]],
         history: dict[str, list],
         param: Param,
         therm_frac: float = 0.0,
@@ -205,7 +211,7 @@ def plot_history(
         outdir: str = None,
         skip: list[str] = None,
         thin: int = 0,
-        #  hline: bool = False,
+        hline: bool = False,
         verbose: bool = False,
         **kwargs,
 ):
@@ -240,6 +246,7 @@ def plot_history(
                         xlabel=xlabel,
                         outfile=outfile,
                         thin=thin,
+                        hline=hline,
                         therm_frac=therm_frac,
                         num_chains=num_chains,
                         verbose=verbose,
@@ -251,8 +258,8 @@ def plot_history(
 
 
 
-yLabel = list[str]
-yLabels = list[yLabel]
+yLabel = List[str]
+yLabels = List[yLabel]
 
 
 def init_plots(
@@ -261,9 +268,6 @@ def init_plots(
         ylabels: yLabels = None,
         **kwargs,
 ):
-    #  colors_rb = ['#00CCFF', '#f92672']
-    #  colors_gp = ['#66ff66', '#ff5fff']
-    #  colors_yp = ['#ffff78', '#cc78fa']
     plots_dkl = None
     plots_ess = None
     if in_notebook:
@@ -282,8 +286,6 @@ def init_plots(
 
 def init_live_joint_plots(
         ylabels: list[str],
-        #  n_era: int = None,
-        #  n_epoch: int = None,
         dpi: int = 120,
         figsize: tuple = None,
         param: Param = None,
@@ -299,10 +301,6 @@ def init_live_joint_plots(
     if colors is None:
         n = np.random.randint(10, size=2)
         colors = [f'C{n[0]}', f'C{n[1]}']
-        #  colors = ['C0', 'C1']
-        #  colors = ['#00CCFF', '#f92672']
-        #colors = ['#66ff66', '#ff5fff']
-        #colors = ['#ffff78', '#cc78fa']
 
     if figsize is None:
         figsize = (8 ,3)
@@ -387,7 +385,6 @@ def init_live_plot(
     ax.tick_params(axis='y', labelcolor=color)
 
     _ = ax.autoscale(True, axis='y')
-    #  plt.Axes.autoscale(True, axis='y')
     display_id = display(fig, display_id=True)
     return {
         'fig': fig, 'ax': ax, 'line': line, 'display_id': display_id,
@@ -395,17 +392,9 @@ def init_live_plot(
 
 
 def moving_average(x: np.ndarray, window: int = 1):
-    #  if len(x) < window:
     if len(x.shape) > 0 and x.shape[0] < window:
         return np.mean(x, keepdims=True)
-    #  if len(x.shape) > 0:
-    #      avgd = x[-window:].mean(-1)
-    #  else:
-    #      avgd = x.mean(-1)
-    #  if x.shape[0] < window:
-    #      return np.mean(x, keepdims=True)
 
-    #  return avgd
     return np.convolve(x, np.ones(window), 'valid') / window
 
 
@@ -423,34 +412,14 @@ def update_plot(
         display_id: DisplayHandle,
         window: int = 1,
 ):
-    #  if isinstance(y, torch.Tensor):
-    #      if y.requires_grad_:
-    #          y = y.detach()
-    #      try:
-    #          y = y.cpu().numpy()
-    #      except AttributeError:
-    #          y = y.numpy()
-    #  else:
-    #      y = np.array(y)
-
+    # -----------------------------------------------------
+    # TODO: Deal with `window == 0` for no moving average
+    # -----------------------------------------------------
     if isinstance(y, list):
         try:
             y = torch.tensor(y)
         except:
             y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
-            #  try:
-            #  except:
-            #      try:
-            #          y = [grab(m[0]) for m in y]
-        #  if isinstance(y[0], tuple) and len(y[0]) == 1:
-        #      y = [grab(m[0]) for m in y]
-        #
-        #  if isinstance(y[0], torch.Tensor):
-        #      y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
-        #      #  y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
-
-    #  if isinstance(y, torch.Tensor):
-    #      y = torch.Tensor(y).detach().cpu().numpy().squeeze()
 
     if isinstance(y, (torch.Tensor, np.ndarray)) and len(y.shape) == 2:
         y = y.mean(-1)
@@ -459,20 +428,6 @@ def update_plot(
         y = grab(y).squeeze()
 
     yavg = moving_average(np.array(y).squeeze(), window=window)
-
-    #  if window > 0 and y.shape[0] > 1:
-    #  if window > 0 and len(y.shape) > 0:
-    #      if len(y.shape) == 2:
-    #          y = y[-window:].mean(-1)
-    #      else:
-    #          y = y[-window:]
-    #      #  y = moving_average(np.array(y).squeeze(), window=window)
-    #  avgd = y[-window:]
-    #  if window > 0 and len(y.shape) > 0:
-    #      if y.shape[0] < window:
-    #          window = min((y.shape[0], -1, 1))
-    #
-    #      avgd = y[-window:].mean(-1)
 
     line[0].set_ydata(yavg)
     #  line[0].set_xdata(np.arange(y.shape[0]))
@@ -487,17 +442,18 @@ def update_plot(
 def update_joint_plots(
         plot_data1: LivePlotData,
         plot_data2: LivePlotData,
+        #  plot_objs: dict[str],
         display_id: DisplayHandle,
+        window: int = 15,
         fig: plt.Figure = None,
-        #  ax1: plt.Axes = None,
-        #  ax2: plt.Axes = None,
-        window=15,
-        #  alt_loss=None,
+        #  **kwargs: dict = None,
 ):
     x1 = plot_data1.data
     x2 = plot_data2.data
     plot_obj1 = plot_data1.plot_obj
     plot_obj2 = plot_data2.plot_obj
+    #  fig = plot_objs.get('fig', None)
+    #  display_id = plot_objs.get('diplay_id', None)
 
     if fig is None:
         fig = plt.gcf()
