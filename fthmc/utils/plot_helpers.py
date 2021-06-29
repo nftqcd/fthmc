@@ -1,17 +1,25 @@
+"""
+plot_helpers.py
+
+Contains helper functions for plotting metrics.
+"""
 from __future__ import absolute_import, annotations, division, print_function
+from fthmc.utils.samplers import apply_flow_to_prior
+#  from fthmc.train import ActionFn
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Callable, List, Union
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from IPython.display import DisplayHandle, display
 
 import fthmc.utils.io as io
-from fthmc.config import Param, TrainConfig
+from fthmc.config import DPI, FlowModel, Param, TrainConfig, DTYPE, ftConfig
 from fthmc.utils.logger import in_notebook
 
 MPL_BACKEND = os.environ.get('MPLBACKEND', None)
@@ -23,7 +31,10 @@ EXT = (
 logger = io.Logger()
 
 PathLike = Union[str, Path]
-Metric = Union[list, np.ndarray, torch.Tensor]
+
+mpl.rcParams['text.usetex'] = False
+
+# pylint:disable=missing-function-docstring,invalid-name
 
 
 @dataclass
@@ -44,8 +55,9 @@ def torch_delete(x: torch.Tensor, indices: torch.Tensor):
     mask[indices] = False
     return x[mask]
 
+
 def therm_arr(
-        x: Union[list, np.ndarray, torch.Tensor],
+        x: Union[np.ndarray, torch.Tensor],
         therm_frac: float = 0.1,
         ret_steps: bool = True
 ):
@@ -54,9 +66,6 @@ def therm_arr(
     num_steps = x.shape[taxis]
     therm_steps = int(therm_frac * num_steps)
     x = x[therm_steps:]
-    #  if isinstance(x, torch.Tensor):
-    #      x = torch_delete(x, torch.arange(therm_steps)
-    #  x = np.delete(x, np.s_[:therm_steps], axis=taxis)
     t = np.arange(therm_steps, num_steps)
     if ret_steps:
         return x, t
@@ -79,7 +88,7 @@ def list_to_arr(x: list):
 
 def savefig(
         fig: plt.Figure,
-        outfile: str,
+        outfile: PathLike,
         dpi: int = 500,
         verbose: bool = True
 ):
@@ -108,54 +117,77 @@ def save_live_plots(plots: dict[str, dict], outdir: PathLike):
             continue
 
 
+ArrayLike = Union[np.ndarray, torch.Tensor]
+
 def plot_metric(
-        metric: Metric,
+        metric: Union[ArrayLike, list],
         title: str = None,
         xlabel: str = None,
         ylabel: str = None,
-        hline: bool = False,
+        hline: bool = True,
         thin: int = 0,
         num_chains: int = 10,
         therm_frac: float = 0.,
         outfile: PathLike = None,
         figsize: tuple = None,
-        verbose: bool = False,
+        verbose: bool = True,
         **kwargs,
 ):
     """Plot metric object."""
     if figsize is None:
         figsize = (4, 3)
 
-    if isinstance(metric, list):
-        if isinstance(metric[0], tuple) and len(metric[0]) == 1:
-            metric = [grab(m[0]) for m in metric]
+    if not isinstance(metric, (list, np.ndarray, torch.Tensor)):
+        raise ValueError('metric must be one of '
+                         '`list`, `np.ndarray`  or `torch.Tensor`')
 
-    if isinstance(metric, list) and isinstance(metric[0], torch.Tensor):
-        metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
+    #  if isinstance(metric, list):
+    #      if isinstance(metric[0], tuple) and len(metric[0]) == 1:
+    #          m = np.
+    #          metric = grab(torch.tensor([grab(m[0]) for m in metric]))
+    x = metric
+    if isinstance(x, list):
+        if isinstance(x[0], torch.Tensor):
+            x = grab(torch.Tensor(torch.stack(x))).squeeze()
+        elif isinstance(x[0], np.ndarray):
+            x = np.stack(x).squeeze()
 
-    if isinstance(metric, torch.Tensor):
-        metric = torch.Tensor(metric).detach().cpu().numpy().squeeze()
+    elif isinstance(x, torch.Tensor):
+        x = grab(x).squeeze()
 
-    metric = np.array(metric)
+    else:
+        try:
+            x = np.array(x)
+        except:
+            raise ValueError('Unable to parse metric.')
+
+    #  if isinstance(metric, list) and isinstance(metric[0], torch.Tensor):
+    #      metric = grab(torch.Tensor(metric)).squeeze()
+    #
+    #  if isinstance(metric, torch.Tensor):
+    #      metric = grab(torch.Tensor(metric)).squeeze()
+
+    #  metric = np.array(metric)
     if thin > 0:
-        metric = metric[::thin]
+        x = x[::thin]
 
-    metric, steps = therm_arr(metric, therm_frac, ret_steps=True)
+    x, steps = therm_arr(x, therm_frac, ret_steps=True)
 
     fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
-    if len(metric.squeeze().shape) == 1:
+    if len(x.squeeze().shape) == 1:
         label = kwargs.pop('label', None)
-        ax.plot(steps, metric, label=label, **kwargs)
+        ax.plot(steps, x, label=label, **kwargs)
 
-    if len(metric.squeeze().shape) == 2:
+    if len(x.squeeze().shape) == 2:
         for idx in range(num_chains):
-            y = metric[:, idx]
+            y = x[:, idx]
             ax.plot(steps, y, **kwargs)
 
     if hline:
-        avg = np.mean(metric)
+        avg = np.mean(x)
         label = f'avg: {avg:.4g}'
-        ax.axhline(avg, label=label, **kwargs)
+        ax.axhline(avg, label=label, color='C4', ls='--', **kwargs)
+        ax.legend(loc='best')
 
     ax.grid(True, alpha=0.5)
     if xlabel is None:
@@ -166,7 +198,7 @@ def plot_metric(
         ax.set_ylabel(ylabel)
 
     if title is not None:
-        ax.set_title(title)
+        ax.set_title(title, fontsize='x-small')
 
     if outfile is not None:
         savefig(fig, outfile, verbose=verbose)
@@ -175,38 +207,56 @@ def plot_metric(
 
 
 def plot_history(
-        history: dict[str, Union[list, torch.Tensor, np.ndarray]],
-        param: Param,
-        therm_frac: float = 0.0,
+        history: dict[str, list],
+        param: Param = None,
         config: TrainConfig = None,
+        ftconfig: ftConfig = None,
+        therm_frac: float = 0.0,
         xlabel: str = None,
         title: str = None,
         num_chains: int = 10,
         outdir: str = None,
         skip: list[str] = None,
         thin: int = 0,
-        #  hline: bool = False,
-        verbose: bool = False,
+        hline: bool = True,
+        verbose: bool = True,
         **kwargs,
 ):
     for key, val in history.items():
         if skip is not None and key in skip:
             continue
 
+        if isinstance(val, (list, np.ndarray, torch.Tensor)):
+            if isinstance(val[0], np.ndarray):
+                vt = np.stack(val)
+
+            elif isinstance(val[0], torch.Tensor):
+                vt = grab(torch.stack(val)).squeeze()
+            else:
+                try:
+                    vt = grab(torch.tensor(val, dtype=DTYPE)).squeeze()
+                except:
+                    vt = grab(torch.Tensor(torch.stack(val).to(DTYPE)))
+                finally:
+                    vt = np.array(val)
+        else:
+            vt = np.array(val)
+
         outfile = None
         if outdir is not None:
             outfile = os.path.join(outdir, f'{key}.{EXT}')
 
         if title is None:
-            tarr = get_title(param, config)
-            title = '\n'.join(tarr) if len(tarr) > 0 else None
+            tarr = get_title(param=param, config=config, ftconfig=ftconfig)
+            title = '\n'.join(tarr) if len(tarr) > 0 else ''
 
-        _ = plot_metric(val,
+        _ = plot_metric(vt,
                         ylabel=key,
                         title=title,
                         xlabel=xlabel,
                         outfile=outfile,
                         thin=thin,
+                        hline=hline,
                         therm_frac=therm_frac,
                         num_chains=num_chains,
                         verbose=verbose,
@@ -217,102 +267,79 @@ def plot_history(
         plt.show()
 
 
+
+yLabel = List[str]
+yLabels = List[yLabel]
+
+
 def init_plots(
-        config: TrainConfig,
-        param: Param,
-        dpi: int = 120,
-        figsize: tuple = None,
+        config: TrainConfig = None,
+        param: Param = None,
+        ylabels: yLabels = None,
+        **kwargs,
 ):
-    plots_dqsq = {}
-    plots_dkl = {}
-    plots_ess = {}
-    colors_rb = ['#00CCFF', '#f92672']
-    colors_gp = ['#66ff66', '#ff5fff']
-    colors_yp = ['#ffff78', '#cc78fa']
-    #  plots_force = {}
-    if figsize is None:
-        figsize = (8, 3)
-
+    plots_dkl = None
+    plots_ess = None
     if in_notebook:
-        #  plots_dqsq = init_live_plot(figsize=figsize, dpi=dpi,
-        #                              param=param, config=config,
-        #                              ylabel='dqsq', xlabel='Epoch')
+        if ylabels is None:
+            ylabels = [['loss_dkl', 'ESS'], ['dq', 'ESS']]
 
-        ylabel_dkl = ['loss_dkl', 'ESS']
-        plots_dkl = init_live_joint_plots(config.n_era,
-                                          config.n_epoch, figsize=figsize,
-                                          param=param, colors=colors_rb,
-                                          config=config, ylabel=ylabel_dkl)
-        ylabel_ess = ['dqsq', 'ess']
-        plots_ess = init_live_joint_plots(config.n_era, config.n_epoch,
-                                          figsize=figsize,
-                                          colors=colors_gp, param=param,
-                                          config=config, ylabel=ylabel_ess)
+        c0 = ['C0', 'C1']
+        plots_dkl = init_live_joint_plots(ylabels=ylabels[0], param=param,
+                                          config=config, colors=c0,
+                                          use_title=True, **kwargs)
+        c1 = ['C2', 'C3']
+        plots_ess = init_live_joint_plots(ylabels=ylabels[1], param=param,
+                                          config=config, colors=c1, **kwargs)
 
-        #  if config.with_force:
-        #      ylabel_force = ['loss_force', 'ESS']
-        #      plots_force = init_live_joint_plots(config.n_era,
-        #                                          config.n_epoch,
-        #                                          figsize=figsize,
-        #                                          param=param,
-        #                                          config=config,
-        #                                          ylabel=ylabel_force)
-
-    return {
-        'dqsq': plots_dqsq,
-        'dkl': plots_dkl,
-        #  'force': plots_force,
-        'ess': plots_ess,
-    }
+    return {'dkl': plots_dkl, 'ess': plots_ess}
 
 
 def init_live_joint_plots(
-        n_era: int,
-        n_epoch: int,
+        ylabels: list[str],
         dpi: int = 120,
         figsize: tuple = None,
         param: Param = None,
         config: TrainConfig = None,
         xlabel: str = None,
-        ylabel: list[str] = None,
         colors: list[str] = None,
         use_title: bool = False,
         set_xlim: bool = False,
 ):
+    if use_title or set_xlim:
+        assert param is not None or config is not None
+
     if colors is None:
-        colors = ['#00CCFF', '#f92672']
-        #colors = ['#66ff66', '#ff5fff']
-        #colors = ['#ffff78', '#cc78fa']
+        n = np.random.randint(10, size=2)
+        colors = [f'C{n[0]}', f'C{n[1]}']
 
     if figsize is None:
         figsize = (8 ,3)
-    #  sns.set_style('ticks')
+
     fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
                             constrained_layout=True)
-    if set_xlim:
-        plt.xlim(0, n_era * n_epoch)
+
+    ax1 = ax0.twinx()
 
     line0 = ax0.plot([0], [0], alpha=0.9, c=colors[0])
-    ax1 = ax0.twinx()
-    if ylabel is None:
-        ax0.set_ylabel('Loss', color=colors[0])
-        ax1.set_ylabel('ess', color=colors[1])
-
-    else:
-        ax0.set_ylabel(ylabel[0], color=colors[0])
-        ax1.set_ylabel(ylabel[1], color=colors[1])
-
-    ax0.tick_params(axis='y', labelcolor=colors[0])
-    ax0.grid(False)
-
     line1 = ax1.plot([0], [0], alpha=0.9, c=colors[1])  # dummy
+
+    ax0.set_ylabel(ylabels[0], color=colors[0])
+    ax1.set_ylabel(ylabels[1], color=colors[1])
 
     ax0.tick_params(axis='y', labelcolor=colors[0])
     ax1.tick_params(axis='y', labelcolor=colors[1])
+
+    ax0.grid(False)
     ax1.grid(False)
     ax0.set_xlabel('Epoch' if xlabel is None else xlabel)
 
+    if set_xlim:
+        assert config is not None
+        plt.xlim(0, config.n_era * config.n_epoch)
+
     if use_title:
+        assert config is not None or param is not None
         title = get_title(param, config)
         if len(title) > 0:
             fig.suptitle('\n'.join(title))
@@ -330,12 +357,18 @@ def init_live_joint_plots(
     }
 
 
-def get_title(param: Param = None, config: TrainConfig = None):
+def get_title(
+        param: Param = None,
+        config: TrainConfig = None,
+        ftconfig: ftConfig = None,
+):
     title = []
     if param is not None:
         title.append(param.uniquestr())
     if config is not None:
         title.append(config.uniquestr())
+    if ftconfig is not None:
+        title.append(ftconfig.uniquestr())
 
     return title
 
@@ -345,6 +378,7 @@ def init_live_plot(
         figsize: tuple = None,
         param: Param = None,
         config: TrainConfig = None,
+        ftconfig: ftConfig = None,
         xlabel: str = None,
         ylabel: str = None,
         use_title: bool = True,
@@ -353,13 +387,13 @@ def init_live_plot(
     color = kwargs.pop('color', '#87ff00')
     xlabel = 'Epoch' if xlabel is None else xlabel
     if figsize is None:
-        figsize = (7, 3)
+        figsize = (8, 2.75)
     #  sns.set_style('ticks')
     fig, ax = plt.subplots(dpi=dpi, figsize=figsize, constrained_layout=True)
     line = ax.plot([0], [0], c=color, **kwargs)
 
     if use_title:
-        title = get_title(param, config)
+        title = get_title(param, config, ftconfig)
         if len(title) > 0:
             _ = fig.suptitle('\n'.join(title))
 
@@ -369,52 +403,53 @@ def init_live_plot(
     ax.tick_params(axis='y', labelcolor=color)
 
     _ = ax.autoscale(True, axis='y')
-    #  plt.Axes.autoscale(True, axis='y')
     display_id = display(fig, display_id=True)
     return {
         'fig': fig, 'ax': ax, 'line': line, 'display_id': display_id,
     }
 
 
-def moving_average(x: np.ndarray, window: int = 10):
-    #  if len(x) < window:
+def moving_average(x: np.ndarray, window: int = 1):
     if len(x.shape) > 0 and x.shape[0] < window:
         return np.mean(x, keepdims=True)
-    #  if x.shape[0] < window:
-    #      return np.mean(x, keepdims=True)
 
     return np.convolve(x, np.ones(window), 'valid') / window
 
 
-def update_plots(plots, metrics, window: int = 0):
+def update_plots(plots, metrics, window: int = 1):
     for key, val in metrics.items():
         if key in plots:
             update_plot(y=val, window=window, **plots[key])
 
 
 def update_plot(
-        y: Metric,
+        y: ArrayLike,
         fig: plt.Figure,
         ax: plt.Axes,
         line: list[plt.Line2D],
         display_id: DisplayHandle,
-        window: int = 0,
+        window: int = 1,
 ):
-    if isinstance(y, torch.Tensor):
-        if y.requires_grad_:
-            y = y.detach()
+    # -----------------------------------------------------
+    # TODO: Deal with `window == 0` for no moving average
+    # -----------------------------------------------------
+    if isinstance(y, list):
         try:
-            y = y.cpu().numpy()
-        except AttributeError:
-            y = y.numpy()
-    else:
-        y = np.array(y)
+            y = torch.tensor(y)
+        except:
+            y = torch.Tensor(torch.stack(y)).detach().cpu().numpy().squeeze()
 
-    if window > 0:
-        y = moving_average(np.array(y).squeeze(), window=window)
+    if isinstance(y, (torch.Tensor, np.ndarray)) and len(y.shape) == 2:
+        y = y.mean(-1)
 
-    line[0].set_ydata(y)
-    line[0].set_xdata(np.arange(y.shape[0]))
+    if isinstance(y, torch.Tensor):
+        y = grab(y).squeeze()
+
+    yavg = moving_average(np.array(y).squeeze(), window=window)
+
+    line[0].set_ydata(yavg)
+    #  line[0].set_xdata(np.arange(y.shape[0]))
+    line[0].set_xdata(np.arange(yavg.shape[0]))
     #  line[0].set_xdata(np.arange(len(yavg)))
     ax.relim()
     ax.autoscale_view()
@@ -425,23 +460,28 @@ def update_plot(
 def update_joint_plots(
         plot_data1: LivePlotData,
         plot_data2: LivePlotData,
+        #  plot_objs: dict[str],
         display_id: DisplayHandle,
+        window: int = 15,
         fig: plt.Figure = None,
-        ax1: plt.Axes = None,
-        ax2: plt.Axes = None,
-        window=15,
-        alt_loss=None,
+        #  **kwargs: dict = None,
 ):
     x1 = plot_data1.data
     x2 = plot_data2.data
     plot_obj1 = plot_data1.plot_obj
     plot_obj2 = plot_data2.plot_obj
+    #  fig = plot_objs.get('fig', None)
+    #  display_id = plot_objs.get('diplay_id', None)
 
     if fig is None:
         fig = plt.gcf()
 
     x1 = np.array(x1).squeeze()
     x2 = np.array(x2).squeeze()
+    if len(x1.shape) == 2:
+        x1 = x1.mean(-1)
+    if len(x2.shape) == 2:
+        x2 = x2.mean(-1)
     y1 = moving_average(x1, window=window)
     y2 = moving_average(x2, window=window)
     plot_obj2.line[0].set_ydata(y2)
@@ -455,3 +495,35 @@ def update_joint_plots(
     plot_obj2.ax.autoscale_view()
     fig.canvas.draw()
     display_id.update(fig)  # need to force colab to update plot
+
+
+def plot_linear_regression(
+        flow: FlowModel,
+        action_fn: Callable[[torch.Tensor], torch.Tensor],
+        batch_size: int = 1024,
+        outdir: str = None,
+):
+    x_, xi_, logq_ = apply_flow_to_prior(flow.prior, flow.layers, batch_size)
+    x = grab(x_)
+    seff = -grab(logq_)
+    s = grab(action_fn(x_))
+    fit_b = np.mean(s) - np.mean(seff)
+
+    logger.log(f'slope 1 linear regression S = S_eff + {fit_b:.4f}')
+    seff_lims = (np.min(seff), np.max(seff))
+    slims = (np.min(s), np.max(s))
+    fig, ax = plt.subplots(1, 1, dpi=DPI, figsize=(4, 4))
+    ax.hist2d(seff, s, bins=20, cmap='viridis', range=[seff_lims, slims])
+    ax.set_xlabel(r'$S_{\mathrm{eff}} = -\log~q(x)$')
+    ax.set_ylabel(r'$S(x)$')
+    ax.set_aspect('equal')
+    xs = np.linspace(*seff_lims, num=4, endpoint=True)
+    ax.plot(xs, xs + fit_b, ':', color='w', label='slope 1 fit')
+    plt.legend(prop={'size': 6})
+    if outdir is not None:
+        outfile = os.path.join(outdir, 'action_linear_regression.pdf')
+        logger.log(f'Saving figure to: {outfile}')
+        plt.savefig(outfile, dpi=250, bbox_inches='tight')
+
+    return fig, ax
+

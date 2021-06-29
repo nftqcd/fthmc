@@ -26,6 +26,8 @@ from fthmc.utils.logger import (Logger, check_else_make_dir, get_timestamp,
 logger = Logger()
 WIDTH, HEIGHT = shutil.get_terminal_size(fallback=(156, 50))
 
+PathLike = Union[str, Path]
+
 def get_logdir(param: Param, config: TrainConfig):
     """Returns dictionary of unique directories for a given experiment."""
     logdir = os.path.join(LOGS_DIR, param.uniquestr())
@@ -45,7 +47,7 @@ def tstamp_dir(d, fstr=None):
 
 
 def rename_with_timestamp(
-    outfile: str,
+    outfile: PathLike,
     fstr: str = None,
     verbose: bool = True
 ):
@@ -71,7 +73,7 @@ def rename_with_timestamp(
 
 def save_history(
         history: dict[str, Any],
-        outfile: str,
+        outfile: PathLike,
         name: str = None
 ):
     head, tail = os.path.split(outfile)
@@ -96,7 +98,7 @@ def save_checkpoint(
         epoch: int,
         model: nn.Module,
         optimizer: Union[optim.Optimizer, OptimizerDict, OptimizerList],
-        outdir: Union[str, Path],
+        outdir: PathLike,  # Union[str, Path],
         history: dict[str, list] = None,
         overwrite: bool = False,
 ):
@@ -107,7 +109,10 @@ def save_checkpoint(
 
     fname = f'ckpt-era{era}-epoch{epoch}.tar'
     ckpt_dir = os.path.abspath(str(outdir))
-    ckpt_files = [os.path.join(ckpt_dir, i) for i in os.listdir(ckpt_dir)]
+    # -------------------------------------------------
+    # TODO: Deal with only keeping last N checkpoints
+    # -------------------------------------------------
+    #  ckpt_files = [os.path.join(ckpt_dir, i) for i in os.listdir(ckpt_dir)]
     outfile = os.path.join(ckpt_dir, fname)
     check_else_make_dir(ckpt_dir)
     #  outfile = os.path.abspath(str(outfile))

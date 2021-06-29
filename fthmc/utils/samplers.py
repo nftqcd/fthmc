@@ -6,16 +6,19 @@ from typing import Callable, Union
 
 import torch
 import numpy as np
+from torch.utils.tensorboard.writer import SummaryWriter
 from fthmc.utils.distributions import calc_dkl, calc_ess
 import fthmc.utils.qed_helpers as qed
 
 import torch.nn as nn
-from fthmc.utils.distributions import bootstrap
+from fthmc.utils.distributions import bootstrap, BasePrior
 from fthmc.utils.logger import Logger
+from fthmc.config import DTYPE
 
 
-NumpyFloat = Union[np.float16, np.float32, np.float64]
-NumpyObject = Union[np.ndarray, NumpyFloat]
+#  NumpyFloat = Union[np.float64, np.float32, np.float64]
+#  NumpyFlow = np.float
+NumpyObject = Union[np.ndarray, np.float]
 TensorLike = Union[list, NumpyObject, torch.Tensor]
 
 logger = Logger()
@@ -34,20 +37,26 @@ def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
 
 
-class BasePrior(nn.Module):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-
-    def log_prob(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
-    def sample_n(self, n: int)  -> torch.Tensor:
-        raise NotImplementedError
-
-
-
-
 def apply_flow_to_prior(
+        prior: BasePrior,
+        coupling_layers: nn.ModuleList,
+        *,
+        batch_size: int,
+        xi: torch.Tensor = None
+):
+    if xi is None:
+        xi = prior.sample_n(batch_size)
+
+    x = xi.clone().to(DTYPE)
+    logq = prior.log_prob(x)
+    for layer in coupling_layers:
+        x, logJ = layer(x)
+        logq = logq - logJ
+
+    return x, xi, logq
+
+
+def apply_flow_to_prior1(
         prior: BasePrior,
         coupling_layers: list[nn.Module],
         *,
@@ -70,7 +79,7 @@ ActionFn = Callable[[float], torch.Tensor]
 
 def generate_ensemble(
         model: nn.Module,
-        action: ActionFn = qed.BatchAction,
+        action: ActionFn,
         ensemble_size: int = 1024,
         batch_size: int = 64,
         nboot: int = 100,
@@ -112,9 +121,15 @@ def serial_sample_generator(model, action_fn, batch_size, num_samples):
         yield x[batch_i], q[batch_i], logq[batch_i], logp[batch_i]
 
 
-def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
+def make_mcmc_ensemble(
+    model,
+    action_fn,
+    batch_size,
+    num_samples,
+    writer: SummaryWriter = None
+):
     xarr = []  # for holding the configurations
-    names = ['ess', 'q', 'dqsq', 'dkl', 'logq', 'logp', 'accepted']
+    names = ['q', 'dqsq', 'logq', 'logp', 'acc']
     history = {
         name: [] for name in names
     }
@@ -122,6 +137,7 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
     # Build Markov chain
     sample_gen = serial_sample_generator(model, action_fn, batch_size,
                                          num_samples)
+    step = 0
     with torch.no_grad():
         for x_new, q_new, logq_new, logp_new in sample_gen:
             # Always accept the first proposal
@@ -151,11 +167,11 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
             metrics = {
                 'q': q_new,
                 'dqsq': (q_new - q_old) ** 2,
-                'dkl': calc_dkl(logp_new, logq_new),
-                'ess': calc_ess(logp_new, logq_new),
+                #  'dkl': calc_dkl(logp_new, logq_new),
+                #  'ess': calc_ess(logp_new, logq_new),
                 'logp': logp_new,
                 'logq': logq_new,
-                'accepted': accepted,
+                'acc': float(accepted),
             }
 
             for key, val in metrics.items():
@@ -163,6 +179,18 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
                     history[key].append(val)
                 except KeyError:
                     history[key] = [val]
+
+                if writer is not None:
+                    v = torch.tensor(val)
+                    if len(v.shape) > 1:
+                        writer.add_histogram(f'inference/{key}', v,
+                                             global_step=step)
+                    else:
+                        writer.add_scalar(f'inference/{key}', v.mean(),
+                                          global_step=step)
+
+            step += 1
+
     history_ = {
         k: torch.Tensor(v).cpu().numpy() for k, v in history.items()
     }

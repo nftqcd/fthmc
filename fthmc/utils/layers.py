@@ -9,30 +9,31 @@ License: CC BY 4.0
 
 With slight modifications by Xiao-Yong Jin to reduce global variables
 """
-from __future__ import absolute_import, division, print_function, annotations
+from __future__ import absolute_import, annotations, division, print_function
+
+from math import pi as PI
 
 import numpy as np
 import packaging.version
 import torch
-import torch.nn as nn
+from torch import nn as nn
+#  from torch import nn
 
+from fthmc.config import DEVICE, npDTYPE
 from fthmc.utils.qed_helpers import compute_u1_plaq
 
+TWO_PI = 2 * PI
+
+TOL = 1e-6
 if torch.cuda.is_available():
-    torch_device = 'cuda'
-    float_dtype = np.float32
-    torch.set_default_tensor_type(torch.cuda.FloatTensor)
-else:
-    torch_device = 'cpu'
-    float_dtype = np.float64
-    torch.set_default_tensor_type(torch.DoubleTensor)
+    WITH_CUDA = True
+    TOL = 1e-3
 
 
-print(f'TORCH DEVICE: {torch_device}')
-
+# pylint:disable=missing-function-docstring
 
 def torch_mod(x: torch.Tensor):
-    return torch.remainder(x, 2*np.pi)
+    return torch.remainder(x, TWO_PI)
 
 
 def torch_wrap(x: torch.Tensor):
@@ -43,8 +44,8 @@ def grab(var: torch.Tensor):
     return var.detach().cpu().numpy()
 
 
-def get_nets(layers: nn.Module):
-    return [l.plaq_coupling.net for l in layers]
+def get_nets(layers: nn.ModuleList):
+    return [layer.plaq_coupling.net for layer in layers]
 
 
 def stack_cos_sin(x: torch.Tensor):
@@ -137,7 +138,7 @@ def gauge_transform(links, alpha):
 
 def random_gauge_transform(x):
     Nconf, VolShape = x.shape[0], x.shape[2:]
-    return gauge_transform(x, 2*np.pi*torch.rand((Nconf,) + VolShape))
+    return gauge_transform(x, TWO_PI * torch.rand((Nconf,) + VolShape))
 
 
 class GaugeEquivCouplingLayer(nn.Module):
@@ -189,7 +190,7 @@ def make_2d_link_active_stripes(shape, mu, off):
 
     nu = 1 - mu
     mask = np.roll(mask, off, axis=nu+1)
-    return torch.from_numpy(mask.astype(float_dtype)).to(torch_device)
+    return torch.from_numpy(mask.astype(npDTYPE)).to(DEVICE)
 
 
 def make_single_stripes(shape, mu, off):
@@ -211,7 +212,7 @@ def make_single_stripes(shape, mu, off):
     elif mu == 1:
         mask[0::4] = 1
     mask = np.roll(mask, off, axis=1-mu)
-    return torch.from_numpy(mask).to(torch_device)
+    return torch.from_numpy(mask).to(DEVICE)
 
 def make_double_stripes(shape, mu, off):
     """
@@ -236,7 +237,7 @@ def make_double_stripes(shape, mu, off):
         mask[0::4] = 1
         mask[1::4] = 1
     mask = np.roll(mask, off, axis=1-mu)
-    return torch.from_numpy(mask).to(torch_device)
+    return torch.from_numpy(mask).to(DEVICE)
 
 
 def make_plaq_masks(mask_shape, mask_mu, mask_off):
@@ -246,7 +247,7 @@ def make_plaq_masks(mask_shape, mask_mu, mask_off):
     mask['passive'] = 1 - mask['frozen'] - mask['active']
     return mask
 
-def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=2*np.pi):
+def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=TWO_PI):
     min_x = a*torch.ones_like(y)
     max_x = b*torch.ones_like(y)
     min_val = f(min_x)
@@ -258,20 +259,25 @@ def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=2*np.pi):
             greater_mask = (y > mid_val).int()
             greater_mask = greater_mask.float()
             err = torch.max(torch.abs(y - mid_val))
-            if err < tol: return mid_x
+            #  if err < tol: return mid_x
+            if err < TOL: return mid_x
             if torch.all((mid_x == min_x) + (mid_x == max_x)):
-                print('WARNING: Reached floating point precision before tolerance '
-                      f'(iter {i}, err {err})')
+                print('WARNING: Reached floating point '
+                      f'precision before tolerance (iter {i}, err {err})')
                 return mid_x
             min_x = greater_mask*mid_x + (1-greater_mask)*min_x
             min_val = greater_mask*mid_val + (1-greater_mask)*min_val
             max_x = (1-greater_mask)*mid_x + greater_mask*max_x
             max_val = (1-greater_mask)*mid_val + greater_mask*max_val
-        print(f'WARNING: Did not converge to tol {tol} in {max_iter} iters! Error was {err}')
+        print(
+            f'WARNING: Did not converge to tol {TOL} in {max_iter} iters! '
+            f'Error was {err}'
+        )
         return mid_x
 
 
 
+# pylint:disable=invalid-name
 class NCPPlaqCouplingLayer(nn.Module):
     def __init__(
         self,
@@ -280,7 +286,7 @@ class NCPPlaqCouplingLayer(nn.Module):
         mask_shape: tuple[int],
         mask_mu: int,
         mask_off: int,
-        inv_prec: float = 1e-6,
+        inv_prec: float = TOL,
         inv_max_iter: int = 1000
     ):
         super().__init__()
@@ -291,13 +297,15 @@ class NCPPlaqCouplingLayer(nn.Module):
         self.net = net
         self.inv_prec = inv_prec
         self.inv_max_iter = inv_max_iter
-        if torch.cuda.is_available():
+        #  if torch.cuda.is_available():
+        if WITH_CUDA:
             self.net = self.net.cuda()
-            for key, val in self.mask.items():
+            for _, val in self.mask.items():
                 val = val.cuda()
 
     def forward(self, x: torch.Tensor):
-        if torch.cuda.is_available():
+        #  if torch.cuda.is_available():
+        if WITH_CUDA:
             x = x.cuda()
 
         x2 = self.mask['frozen'] * x
@@ -317,7 +325,8 @@ class NCPPlaqCouplingLayer(nn.Module):
         fx = (
             self.mask['active'] * torch_mod(fx1 + t)
             + self.mask['passive'] * x
-            + self.mask['frozen'] * x)
+            + self.mask['frozen'] * x
+        )
         return fx, logJ
 
     def reverse(self, fx: torch.Tensor):

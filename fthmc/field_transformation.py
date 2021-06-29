@@ -1,269 +1,312 @@
-from __future__ import absolute_import, division, print_function, annotations
+"""
+field_transformation.py
+
+Implements `FieldTransformation` object for running HMC with trained flow.
+"""
+from __future__ import absolute_import, annotations, division, print_function
+
 import time
-from typing import Union
+from math import pi as PI
+from typing import Optional
+
 import torch
 import torch.nn as nn
-import numpy as np
+from torch.utils.tensorboard.writer import SummaryWriter
 
-from fthmc.utils import qed_helpers as qed
-from fthmc.config import TrainConfig, Param, grab
 import fthmc.utils.plot_helpers as plotter
-#  from fthmc.utils.plot_helpers import init_live_plot, update_plots
+from fthmc.config import DTYPE, Param, TrainConfig, ftConfig
+from fthmc.utils import qed_helpers as qed
+from fthmc.utils.logger import Logger, in_notebook
 
+#  import torch.autograd.functional as F  # noqa: F401
 
-from math import pi as PI
 
 TWO_PI = 2. * PI
-
-from fthmc.utils.logger import Logger
 
 logger = Logger()
 
 
-def grab(x: torch.Tensor):
-    if isinstance(x, torch.Tensor):
-        return x.detach().cpu().numpy()
-    return float(x)
+# pylint:disable=missing-function-docstring
+def init_live_plots(
+    xlabels: list,
+    ylabels: list,
+    colors: list = None,
+    param: Param = None,
+    config: TrainConfig = None,
+    **kwargs,
+):
+    plots = {}
+    if colors is None:
+        colors = [f'C{i}' for i in range(10)]
+    else:
+        assert len(colors) == len(ylabels)
+    for idx, (xlabel, ylabel) in enumerate(zip(xlabels, ylabels)):
+        use_title = (idx == 0)
+        plots[ylabel] = plotter.init_live_plot(param=param,
+                                               config=config,
+                                               color=colors[idx],
+                                               xlabel=xlabel,
+                                               ylabel=ylabel,
+                                               use_title=use_title,
+                                               **kwargs)
 
-Flow = Union[nn.ModuleList, list[nn.Module]]
+    return plots
 
+
+def jacobian(y: torch.Tensor, x: torch.Tensor, create_graph: bool = False):
+    # xx, yy = x.detach().numpy(), y.detach().numpy()
+    jac = []
+    flat_y = y.reshape(-1)
+    grad_y = torch.zeros_like(flat_y)
+    for i in range(len(flat_y)):
+        grad_y[i] = 1.
+        grad_x, = torch.autograd.grad(flat_y, x, grad_y, retain_graph=True,
+                                      create_graph=create_graph)
+        jac.append(grad_x.reshape(x.shape))
+        grad_y[i] = 0.
+
+    return torch.stack(jac).reshape(y.shape + x.shape)
+
+
+def write_summaries(
+        metrics: dict,
+        writer: SummaryWriter,
+        step: int,
+        pre: str = 'ftHMC'
+):
+    for key, val in metrics.items():
+        if key == 'traj':
+            continue
+        #  if key == 'dt':
+        if key in ['dt', 'acc']:
+            val = torch.tensor(val, dtype=DTYPE)
+        if len(val.shape) > 1:
+            writer.add_histogram(f'{pre}/{key}', val, global_step=step)
+        else:
+            writer.add_scalar(f'{pre}/{key}', val.mean(), global_step=step)
+
+
+
+torch._C._debug_only_display_vmap_fallback_warnings(True)
+
+
+# pylint:disable=invalid-name, unnecessary-lambda, missing-function-docstring
+# pylint:disable=no-member
 class FieldTransformation(nn.Module):
     def __init__(
             self,
-            flow: Flow,
-            param: Param,
-            config: TrainConfig = None
+            flow: nn.ModuleList,
+            config: TrainConfig,
+            ftconfig: ftConfig,
     ):
+
         super().__init__()
-        self.param = param
-        self.flow = flow
-        self.config = config
-        action_fn = qed.BatchAction(param.beta)
+        self.flow = flow        # layers of a `FlowModel`
+        self.config = config    # Training config
+        self.ftconfig = ftconfig
+        self.tau = self.ftconfig.tau
+        self.nstep = self.ftconfig.nstep
+        self.dt = self.ftconfig.dt
+
+
+        action_fn = qed.BatchAction(config.beta)
         self._action_fn = lambda x: action_fn(x)
-        self._charges_fn = lambda x: qed.batch_charges(x)
+        self._charge_fn = lambda x: qed.batch_charges(x=x).detach()
+        self._action_sum = lambda x: self.action(x).sum(-1)
+        self._action_sum_hmc = lambda x: self._action_fn(x).sum(-1)
+        #  self._force_fn = lambda x: F.jacobian(self.action().sum(-1),
+        #                                        inputs=x,
+        #                                        vectorize=True,
+        #                                        create_graph=True)
+        #
+        self._denom = (self.config.beta * self.config.volume)
+        self._plaq_fn = lambda x: (
+            ((-1.) * self._action_fn(x) / self._denom).detach()
+        )
 
     def action(self, x: torch.Tensor):
-        #y = x
-
-        #logdet = 0.
-        #for layer in self.flow:
-        #    y, logdet_ = layer(y)
-        #    logdet = logdet + logdet_
-        #
-        #return self._action_fn(y) - logdet
-        z, logdet = self.flow_forward(x)
-
-        return self._action_fn(z) - logdet
-
-    def flow_forward(self, x: torch.Tensor):
         logdet = 0.
         for layer in self.flow:
-            x, logdet_ = layer(x)
+            x, logJ = layer(x)
+            logdet = logdet + logJ
+
+        return self._action_fn(x) - logdet
+
+    def flow_forward(self, x: torch.Tensor):
+        xi = x
+        logdet = 0.
+        for layer in self.flow:
+            xi, logdet_ = layer.forward(xi)
             logdet = logdet + logdet_
 
-        return x, logdet
+        return xi, logdet
 
     def flow_backward(self, x: torch.Tensor):
         logdet = 0.
         #  for layer in self.flow[::-1]:
-        for layer in [self.flow][::-1]:
+        #  for layer in [self.flow][::-1]:
+        for layer in reversed(self.flow):
             x, logdet_ = layer.reverse(x)
-            logdet = logdet - logdet_
+            logdet = logdet + logdet_
 
         return x, logdet
 
-    def force(self, x: torch.Tensor, create_graph: bool = False):
-        x.requires_grad_(True)
+    def force(self, x: torch.Tensor):
+        x = x.detach().requires_grad_()
         s = self.action(x)
-        dsdx, = torch.autograd.grad(s.sum(), x, create_graph=create_graph)
-        #  x.requires_grad_(False)
+        dsdx = torch.autograd.grad(s, x)[0]
+        # free up GPU memory
+        #  del x, s
+        #  if torch.cuda.is_available():
+        #      torch.cuda.empty_cache()
 
         return dsdx
 
     @staticmethod
     def wrap(x: torch.Tensor):
-        x = (x - PI) / TWO_PI
-
-        return TWO_PI * (x - x.floor() - 0.5)
+        return torch.remainder(x + PI, TWO_PI) - PI
 
     def calc_energy(self, x: torch.Tensor, v: torch.Tensor):
-        nb = x.shape[0]
-        return self.action(x) + 0.5 * (v * v).reshape(nb, -1).sum(-1)
+        #  return (self.action(x)
+        #          + 0.5 * (v * v).reshape(x.shape[0], -1).sum(-1))
+        return self.action(x) + (v * v).sum()
 
     def leapfrog(self, x: torch.Tensor, v: torch.Tensor):
-        dt = self.param.dt
+        x_ = x + 0.5 * self.dt * v
+        v_ = v + (-self.dt) * self.force(x_)
 
-        x = x + 0.5 * dt * v
-        v = v + (-dt) * self.force(x)
+        for _ in range(self.nstep - 1):
+            x_ = x_ + self.dt * v_
+            v_ = v_ + (-self.dt) * self.force(x_)
 
-        for _ in range(self.param.nstep - 1):
-            x = x + dt * v
-            v = v + (-dt) * self.force(x)
-
-        x = x + 0.5 * dt * v
+        x = x + 0.5 * self.dt * v
         return x, v
 
-    def build_trajectory(self, x: torch.Tensor = None):
-        if x is None:
-            x = self.param.initializer()[None, :]
+    def hmc(self, x: torch.Tensor, step: int = None):
+        if torch.cuda.is_available():
+            x = x.cuda()
 
-        #x0 = x.clone()
-        x0 = x.clone()
-        nb = x.shape[0]
+        t0 = time.time()
+        metrics = {}
+        if step is not None:
+            metrics['traj'] = step
+
+        x, _ = self.flow_backward(x)
         v = torch.randn_like(x)
-        h0 = self.calc_energy(x, v)
+        h0 = self.action(x) + 0.5 * (v * v).sum()
 
-        x, v = self.leapfrog(x, v)
-        x = self.wrap(x)
+        x_, v_ = self.leapfrog(x, v)
+        x_ = self.wrap(x_)
+        h1 = self.action(x_) + 0.5 * (v_ * v_).sum()
 
-        h1 = self.calc_energy(x, v)
-
+        prob = torch.rand([], dtype=torch.float64)
         dh = h1 - h0
         exp_mdh = torch.exp(-dh)
-        acc = (torch.rand_like(exp_mdh) < exp_mdh).float()
+        acc = prob < exp_mdh
+        xnew = x_ if acc else x
+        xout, _ = self.flow_forward(xnew)
 
-        x_ = x.reshape(nb, -1)
-        x_ = x.reshape(nb, -1)
-        x_ = acc * x + (1 - acc) * x0
+        metrics.update(**{
+            'dt': time.time() - t0,
+            'acc': acc.detach(),
+            'dh': dh.detach(),
+        })
 
-        xout, _  = self.flow_forward(x_)
-        return self.wrap(xout), acc, dh, exp_mdh
+        return xout, metrics
 
-    def forward1(self, x: torch.Tensor):
-        v0 = torch.randn_like(x)
+    def initializer(self, rand: bool = True):
+        nd = self.config.nd
+        lat = self.config.lat
+        if rand:
+            x = torch.empty([nd, ] + lat).uniform_(0, TWO_PI)
+        else:
+            x = torch.zeros([nd, ] + lat)
 
-        v0_norm = (v0 * v0).sum()
-        logdet = 0.
-        for layer in self.flow:
-            x, logdet_ = layer(x)
-            logdet = logdet + logdet_
+        return x[None, :]
 
-        action = self._action_fn(x) - logdet
 
-        plaq0 = self.action(x) + 0.5 * v0_norm
-
-        x, v1 = self.leapfrog(x, v)
-        xr = self.wrap(x)
-
-        v1_norm = (v1 * v1).sum()
-        plaq1 = self.action(x) + 0.5 * v1_norm
-
-        prob = torch.rand(x.shape[0])
-        dH = plaq1 - plaq0
-        exp_mdH = torch.exp(-dH)
-        acc = (prob < exp_mdH).float()
-        x_ = xr if acc else x
-
-        prob = torch.exp(torch.minimum(dH, torch.zeros_like(dH)))
-        acc = torch.rand(prob.shape) < prob
-        pass
-
+    def lattice_metrics(self, x: torch.Tensor, qold: torch.Tensor):
+        q = self._charge_fn(x).detach()
+        p = self._plaq_fn(x).detach()
+        dq = torch.sqrt((q - qold) ** 2).detach()
+        return {'plaq': p, 'q': q, 'dq': dq}
 
     def run(
             self,
             x: torch.Tensor = None,
             nprint: int = 1,
             nplot: int = 1,
-            dpi: int = 120,
-            figsize: tuple = None,
-            window: int = 0,
+            window: int = 10,
+            num_trajs: int = None,
+            writer: Optional[SummaryWriter] = None,
+            plotdir: str = None,
+            **kwargs,
     ):
         if x is None:
-            x = self.param.initializer()
+            x = self.initializer()
 
-        runs_history = {}
-        beta = self.param.beta
-        volume = self.param.volume
-        if figsize is None:
-            figsize = (8, 2.75)
+        if num_trajs is None:
+            num_trajs = 1000
 
-        plots_acc = plotter.init_live_plot(dpi=dpi,
-                                           figsize=figsize,
-                                           ylabel='acc',
-                                           color='#F92672',
-                                           param=self.param,
-                                           xlabel='trajectory',
-                                           config=self.config)
-        plots_dqsq = plotter.init_live_plot(dpi=dpi,
-                                            figsize=figsize,
-                                            color='#00CCff',
-                                            ylabel='dqsq',
-                                            xlabel='trajectory')
-        plots_plaq = plotter.init_live_plot(figsize=figsize,
-                                            dpi=dpi,
-                                            color='#ffff00',
-                                            ylabel='plaq',
-                                            xlabel='trajectory')
+        #  for n in range(num_runs):
+        if x is None:
+            x = self.initializer()
 
-        plots = {'plaq': plots_plaq, 'dqsq': plots_dqsq, 'acc': plots_acc}
+        history = {}  # type: dict[str, list[torch.Tensor]]
+        q = qed.batch_charges(x)
+        p = (-1.) * self.action(x) / self._denom
+        logger.print_metrics({'plaq': p, 'q': q})
 
-        for n in range(self.param.nrun):
-            t0 = time.time()
-            xarr = []
-            history = {}
-            qarr = torch.zeros((self.param.ntraj, x.shape[0]))
-            for i in range(self.param.ntraj):
-                t_ = time.time()
-                q0 = self._charges_fn(x)
-                #q0 = qed.(x[None, :])
+        plots = {}
+        if in_notebook():
+            plots = init_live_plots(config=self.config,
+                                    ylabels=['acc', 'dq', 'plaq'],
+                                    xlabels=3 * ['trajectory'], **kwargs)
 
-                x, acc, dH, exp_mdH = self.build_trajectory(x)
-                #x = self.
-                q1 = self._charges_fn(x)
-                #q1 = qed.batch_charges(x[None, :])
+        # ------------------------------------------------------------
+        # TODO: Create directories for `FieldTransformation` and
+        # `save_live_plots` along with metrics, other plots to dirs
+        # ------------------------------------------------------------
+        for i in range(num_trajs):
+            x, metrics_ = self.hmc(x, step=i)
+            try:
+                qold = history['q'][i-1]
+            except KeyError:
+                qold = q
+            lmetrics = self.lattice_metrics(x, qold)
+            metrics = {**metrics_, **lmetrics}
 
-                dqsq = (q1 - q0) ** 2
-                #logp = (-1.) * self._action_fn(x)
-                logp = (-1.) * self.action(x)
-                plaq = logp / (beta * volume)
-                plaq_no_grad = plaq.detach()
+            for key, val in metrics.items():
+                if writer is not None:
+                    write_summaries(metrics, writer=writer,
+                                    step=i, pre='ftHMC')
+                try:
+                    history[key].append(val)
+                except KeyError:
+                    history[key] = [val]
+                #  history[key][i] = val
 
-                qarr[i] = q1
-                metrics = {
-                    'traj': i,
-                    'dt': time.time() - t_,
-                    'acc': acc,
-                    'dH': dH,
-                    'exp_mdH': exp_mdH,
-                    'dqsq': dqsq,
-                    'q': q1,
-                    'plaq': plaq_no_grad,
+            if (i - 1) % nplot == 0 and in_notebook() and plots != {}:
+                #  data = {
+                #      k: history[k][:i, :] for k in ['dq', 'acc', 'plaq']
+                #  }
+                data = {
+                    k: history[k] for k in ['dq', 'acc', 'plaq']
                 }
+                plotter.update_plots(plots, data, window=window)
 
-                for key, val in metrics.items():
-                    try:
-                        history[key].append(grab(val))
-                    except KeyError:
-                        history[key] = [grab(val)]
+            if i % nprint == 0:
+                logger.print_metrics(metrics)  # , pre=pre)
 
-                if i % nplot == 0:
-                    #  acc_ = torch.Tensor([list(i) for i in
-                    #                       history['acc']).mean(-1)
-                    #acc_ = torch.Tensor(history).mean(-1)
-                    dqsq_avg = np.array(history['dqsq']).mean(axis=-1)
+            if plotdir is not None and in_notebook():
+                plotter.save_live_plots(plots, outdir=plotdir)
 
-                    #  acc_ = history['acc'][-1].mean()
-                    #  dqsq_ = history['dqsq'][-1].mean()
-                    #  plaq_ = history['plaq'][-1].mean()
-                    #  q = qarr[:, 0]
-                    #  plaq_ = torch.Tensor(history['plaq']).mean(-1)
-                    data = {
-                        #  'q': grab(qarr[:, 0]),
-                        'dqsq': dqsq_avg,
-                        'acc': history['acc'],
-                        'plaq': history['plaq'],
-                    }
-                    plotter.update_plots(plots, data, window=5)
+        #  histories[n] = history
+        plotter.plot_history(history,
+                             config=self.config,
+                             outdir=plotdir,
+                             #  self.param,
+                             therm_frac=0.0,
+                             xlabel='Trajectory')
 
-
-                if i % nprint == 0:
-                    logger.print_metrics(metrics, skip=['q'], pre=['(now)'],
-                                         window=0)
-                    logger.print_metrics(metrics, skip=['q'], pre=['(avg)'],
-                                         window=10)
-                #logger.print_metrics(metrics, skip=['q'], pre=['(avg)'],
-                #                     window=min(i, 20))
-
-            runs_history[n] = history
-
-        return runs_history
+        return history

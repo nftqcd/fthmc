@@ -7,5 +7,10 @@ modulepath = os.path.dirname(here)
 if modulepath not in sys.path:
     sys.path.append(modulepath)
 
+parent = os.path.dirname(modulepath)
+if parent not in sys.path:
+    sys.path.append(parent)
+
+
 
 
