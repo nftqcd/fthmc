@@ -6,6 +6,7 @@ from typing import Callable, Union
 
 import torch
 import numpy as np
+from torch.utils.tensorboard.writer import SummaryWriter
 from fthmc.utils.distributions import calc_dkl, calc_ess
 import fthmc.utils.qed_helpers as qed
 
@@ -120,9 +121,15 @@ def serial_sample_generator(model, action_fn, batch_size, num_samples):
         yield x[batch_i], q[batch_i], logq[batch_i], logp[batch_i]
 
 
-def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
+def make_mcmc_ensemble(
+    model,
+    action_fn,
+    batch_size,
+    num_samples,
+    writer: SummaryWriter = None
+):
     xarr = []  # for holding the configurations
-    names = ['ess', 'q', 'dqsq', 'dkl', 'logq', 'logp', 'accepted']
+    names = ['q', 'dqsq', 'logq', 'logp', 'acc']
     history = {
         name: [] for name in names
     }
@@ -130,6 +137,7 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
     # Build Markov chain
     sample_gen = serial_sample_generator(model, action_fn, batch_size,
                                          num_samples)
+    step = 0
     with torch.no_grad():
         for x_new, q_new, logq_new, logp_new in sample_gen:
             # Always accept the first proposal
@@ -159,11 +167,11 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
             metrics = {
                 'q': q_new,
                 'dqsq': (q_new - q_old) ** 2,
-                'dkl': calc_dkl(logp_new, logq_new),
-                'ess': calc_ess(logp_new, logq_new),
+                #  'dkl': calc_dkl(logp_new, logq_new),
+                #  'ess': calc_ess(logp_new, logq_new),
                 'logp': logp_new,
                 'logq': logq_new,
-                'accepted': accepted,
+                'acc': float(accepted),
             }
 
             for key, val in metrics.items():
@@ -171,6 +179,18 @@ def make_mcmc_ensemble(model, action_fn, batch_size, num_samples):
                     history[key].append(val)
                 except KeyError:
                     history[key] = [val]
+
+                if writer is not None:
+                    v = torch.tensor(val)
+                    if len(v.shape) > 1:
+                        writer.add_histogram(f'inference/{key}', v,
+                                             global_step=step)
+                    else:
+                        writer.add_scalar(f'inference/{key}', v.mean(),
+                                          global_step=step)
+
+            step += 1
+
     history_ = {
         k: torch.Tensor(v).cpu().numpy() for k, v in history.items()
     }
