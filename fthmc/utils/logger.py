@@ -2,6 +2,7 @@
 logger.py
 """
 from __future__ import absolute_import, division, print_function, annotations
+from dataclasses import asdict, dataclass, is_dataclass
 import os
 from pathlib import Path
 from typing import Any, Union
@@ -128,7 +129,10 @@ def strformat(
             v = np.array(v)
 
         #  avgd = running_average(v, window)
-        avgd = moving_average(v, window)
+        if window > 0:
+            avgd = moving_average(v, window)
+        else:
+            avgd = v
 
         #  if window > 0 and len(v.shape) > 0:
         #      if v.shape[0] < window:
@@ -233,6 +237,28 @@ class Logger:
 
         return outstr
 
+    def print_dict(self, d: dict, indent: int = 0, name: str = None):
+        kvstrs = []
+        pre = indent * ' '
+        if name is not None:
+            nstr = f'{str(name)}'
+            line = len(nstr) * '-'
+            kvstrs.extend([pre + nstr, pre + line])
+
+        for key, val in d.items():
+            if is_dataclass(val):
+                val = asdict(val)
+            if isinstance(val, dict):
+                strs = self.print_dict(val, indent=indent+2, name=key)
+            else:
+                strs = pre + '='.join([str(key), str(val)])
+
+            kvstrs.append(strs)
+
+        dstr = '\n'.join(kvstrs)
+        self.log(dstr)
+        return dstr
+
     def save_metrics(
             self,
             metrics: dict,
@@ -242,18 +268,39 @@ class Logger:
         """Save metrics to compressed `.z.` file."""
         if tstamp is None:
             tstamp = get_timestamp('%Y-%m-%d-%H%M%S')
-
         if outfile is None:
             outdir = os.path.join(os.getcwd(), tstamp)
             fname = 'metrics.z'
-
         else:
             outdir, fname = os.path.split(outfile)
-
         check_else_make_dir(outdir)
         outfile = os.path.join(os.getcwd(), tstamp, 'metrics.z')
         self.log(f'Saving metrics to: {os.path.relpath(outdir)}')
         savez(metrics, outfile, name=fname.split('.')[0])
+
+        return
+
+
+def print_dict(d: dict, indent=0, name: str = None):
+    kv_strs = []
+    pre = indent * ' '
+
+    if name is not None:
+        nstr = f'{str(name)}'
+        line = len(nstr) * '-'
+        kv_strs.extend([pre + nstr, pre + line])
+
+    for key, val in d.items():
+        if is_dataclass(val):
+            val = asdict(val)
+        if isinstance(val, dict):
+            strs = print_dict(val, indent=indent+2, name=key)
+        else:
+            strs = pre + '='.join([str(key), str(val)])
+
+        kv_strs.append(strs)
+
+    return '\n'.join(kv_strs)
 
 
 def check_else_make_dir(outdir: Union[str, Path, list, tuple]):
