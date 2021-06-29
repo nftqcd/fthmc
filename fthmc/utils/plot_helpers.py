@@ -4,19 +4,22 @@ plot_helpers.py
 Contains helper functions for plotting metrics.
 """
 from __future__ import absolute_import, annotations, division, print_function
+from fthmc.utils.samplers import apply_flow_to_prior
+#  from fthmc.train import ActionFn
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Union
+from typing import Any, Callable, List, Union
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from IPython.display import DisplayHandle, display
 
 import fthmc.utils.io as io
-from fthmc.config import Param, TrainConfig, DTYPE
+from fthmc.config import DPI, FlowModel, Param, TrainConfig, DTYPE, ftConfig
 from fthmc.utils.logger import in_notebook
 
 MPL_BACKEND = os.environ.get('MPLBACKEND', None)
@@ -28,6 +31,8 @@ EXT = (
 logger = io.Logger()
 
 PathLike = Union[str, Path]
+
+mpl.rcParams['text.usetex'] = False
 
 # pylint:disable=missing-function-docstring,invalid-name
 
@@ -119,13 +124,13 @@ def plot_metric(
         title: str = None,
         xlabel: str = None,
         ylabel: str = None,
-        hline: bool = False,
+        hline: bool = True,
         thin: int = 0,
         num_chains: int = 10,
         therm_frac: float = 0.,
         outfile: PathLike = None,
         figsize: tuple = None,
-        verbose: bool = False,
+        verbose: bool = True,
         **kwargs,
 ):
     """Plot metric object."""
@@ -181,7 +186,8 @@ def plot_metric(
     if hline:
         avg = np.mean(x)
         label = f'avg: {avg:.4g}'
-        ax.axhline(avg, label=label, **kwargs)
+        ax.axhline(avg, label=label, color='C4', ls='--', **kwargs)
+        ax.legend(loc='best')
 
     ax.grid(True, alpha=0.5)
     if xlabel is None:
@@ -192,7 +198,7 @@ def plot_metric(
         ax.set_ylabel(ylabel)
 
     if title is not None:
-        ax.set_title(title)
+        ax.set_title(title, fontsize='x-small')
 
     if outfile is not None:
         savefig(fig, outfile, verbose=verbose)
@@ -202,42 +208,46 @@ def plot_metric(
 
 def plot_history(
         history: dict[str, list],
-        param: Param,
-        therm_frac: float = 0.0,
+        param: Param = None,
         config: TrainConfig = None,
+        ftconfig: ftConfig = None,
+        therm_frac: float = 0.0,
         xlabel: str = None,
         title: str = None,
         num_chains: int = 10,
         outdir: str = None,
         skip: list[str] = None,
         thin: int = 0,
-        hline: bool = False,
-        verbose: bool = False,
+        hline: bool = True,
+        verbose: bool = True,
         **kwargs,
 ):
     for key, val in history.items():
         if skip is not None and key in skip:
             continue
 
-        if isinstance(val[0], np.ndarray):
-            vt = np.stack(val)
+        if isinstance(val, (list, np.ndarray, torch.Tensor)):
+            if isinstance(val[0], np.ndarray):
+                vt = np.stack(val)
 
-        elif isinstance(val[0], torch.Tensor):
-            vt = grab(torch.stack(val)).squeeze()
+            elif isinstance(val[0], torch.Tensor):
+                vt = grab(torch.stack(val)).squeeze()
+            else:
+                try:
+                    vt = grab(torch.tensor(val, dtype=DTYPE)).squeeze()
+                except:
+                    vt = grab(torch.Tensor(torch.stack(val).to(DTYPE)))
+                finally:
+                    vt = np.array(val)
         else:
-            try:
-                vt = grab(torch.tensor(val, dtype=DTYPE)).squeeze()
-            except:
-                vt = grab(torch.Tensor(torch.stack(val).to(DTYPE)))
-            finally:
-                vt = np.array(val)
+            vt = np.array(val)
 
         outfile = None
         if outdir is not None:
             outfile = os.path.join(outdir, f'{key}.{EXT}')
 
         if title is None:
-            tarr = get_title(param, config)
+            tarr = get_title(param=param, config=config, ftconfig=ftconfig)
             title = '\n'.join(tarr) if len(tarr) > 0 else ''
 
         _ = plot_metric(vt,
@@ -276,7 +286,8 @@ def init_plots(
 
         c0 = ['C0', 'C1']
         plots_dkl = init_live_joint_plots(ylabels=ylabels[0], param=param,
-                                          config=config, colors=c0, **kwargs)
+                                          config=config, colors=c0,
+                                          use_title=True, **kwargs)
         c1 = ['C2', 'C3']
         plots_ess = init_live_joint_plots(ylabels=ylabels[1], param=param,
                                           config=config, colors=c1, **kwargs)
@@ -346,12 +357,18 @@ def init_live_joint_plots(
     }
 
 
-def get_title(param: Param = None, config: TrainConfig = None):
+def get_title(
+        param: Param = None,
+        config: TrainConfig = None,
+        ftconfig: ftConfig = None,
+):
     title = []
     if param is not None:
         title.append(param.uniquestr())
     if config is not None:
         title.append(config.uniquestr())
+    if ftconfig is not None:
+        title.append(ftconfig.uniquestr())
 
     return title
 
@@ -361,6 +378,7 @@ def init_live_plot(
         figsize: tuple = None,
         param: Param = None,
         config: TrainConfig = None,
+        ftconfig: ftConfig = None,
         xlabel: str = None,
         ylabel: str = None,
         use_title: bool = True,
@@ -375,7 +393,7 @@ def init_live_plot(
     line = ax.plot([0], [0], c=color, **kwargs)
 
     if use_title:
-        title = get_title(param, config)
+        title = get_title(param, config, ftconfig)
         if len(title) > 0:
             _ = fig.suptitle('\n'.join(title))
 
@@ -460,6 +478,10 @@ def update_joint_plots(
 
     x1 = np.array(x1).squeeze()
     x2 = np.array(x2).squeeze()
+    if len(x1.shape) == 2:
+        x1 = x1.mean(-1)
+    if len(x2.shape) == 2:
+        x2 = x2.mean(-1)
     y1 = moving_average(x1, window=window)
     y2 = moving_average(x2, window=window)
     plot_obj2.line[0].set_ydata(y2)
@@ -473,3 +495,35 @@ def update_joint_plots(
     plot_obj2.ax.autoscale_view()
     fig.canvas.draw()
     display_id.update(fig)  # need to force colab to update plot
+
+
+def plot_linear_regression(
+        flow: FlowModel,
+        action_fn: Callable[[torch.Tensor], torch.Tensor],
+        batch_size: int = 1024,
+        outdir: str = None,
+):
+    x_, xi_, logq_ = apply_flow_to_prior(flow.prior, flow.layers, batch_size)
+    x = grab(x_)
+    seff = -grab(logq_)
+    s = grab(action_fn(x_))
+    fit_b = np.mean(s) - np.mean(seff)
+
+    logger.log(f'slope 1 linear regression S = S_eff + {fit_b:.4f}')
+    seff_lims = (np.min(seff), np.max(seff))
+    slims = (np.min(s), np.max(s))
+    fig, ax = plt.subplots(1, 1, dpi=DPI, figsize=(4, 4))
+    ax.hist2d(seff, s, bins=20, cmap='viridis', range=[seff_lims, slims])
+    ax.set_xlabel(r'$S_{\mathrm{eff}} = -\log~q(x)$')
+    ax.set_ylabel(r'$S(x)$')
+    ax.set_aspect('equal')
+    xs = np.linspace(*seff_lims, num=4, endpoint=True)
+    ax.plot(xs, xs + fit_b, ':', color='w', label='slope 1 fit')
+    plt.legend(prop={'size': 6})
+    if outdir is not None:
+        outfile = os.path.join(outdir, 'action_linear_regression.pdf')
+        logger.log(f'Saving figure to: {outfile}')
+        plt.savefig(outfile, dpi=250, bbox_inches='tight')
+
+    return fig, ax
+
