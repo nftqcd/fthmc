@@ -173,9 +173,9 @@ class BatchAction:
         return (-self.beta) * action
 
 
-Flow = List[torch.nn.Module]
+#  Flow = List[torch.nn.Module]
 
-def ft_flow(flow: Flow, x: torch.Tensor):
+def ft_flow(flow: nn.ModuleList, x: torch.Tensor):
     """Pass `x` through (forward) through each layer in `flow`."""
     #  if torch.cuda.is_available():
     #      f = f.cuda()
@@ -185,7 +185,7 @@ def ft_flow(flow: Flow, x: torch.Tensor):
     return x.detach()
 
 
-def ft_flow_inv(flow: list[nn.Module], x: torch.Tensor):
+def ft_flow_inv(flow: nn.ModuleList, x: torch.Tensor):
     """Pass"""
     #  if torch.cuda.is_available():
     #      f = f.cuda()
@@ -245,21 +245,26 @@ def plaq_phase(f, mu=0, nu=1):
 
 
 
-def action(param, f):
-    return (-param.beta)*torch.sum(torch.cos(plaq_phase(f)))
+def action(param: Param, x: torch.Tensor):
+    return (-param.beta) * torch.sum(torch.cos(plaq_phase(x)))
 
 
-def force(param, f):
-    f.requires_grad_(True)
-    s = action(param, f)
-    f.grad = None
+def force(param: Param, x: torch.Tensor):
+    x.requires_grad_(True)
+    s = action(param, x)
+    x.grad = None
     s.backward()
-    ff = f.grad
-    f.requires_grad_(False)
-    return ff
+    dsdx = x.grad
+    x.requires_grad_(False)
+    return dsdx
 
 
-def leapfrog(param, x, p, verbose=True):
+def leapfrog(
+        param: Param,
+        x: torch.Tensor,
+        p: torch.Tensor,
+        verbose: bool = True
+):
     dt = param.dt
     x_ = x + 0.5 * dt * p
     f = force(param, x_)
