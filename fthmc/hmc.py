@@ -4,7 +4,7 @@ hmc.py
 from __future__ import absolute_import, print_function, division, annotations
 
 from fthmc.utils.plot_helpers import init_live_plot, plot_history, update_plots
-from fthmc.config import LOGS_DIR
+from fthmc.config import CHAINS_TO_PLOT, DTYPE, LOGS_DIR, THERM_FRAC
 import os
 import torch
 from fthmc.config import Param
@@ -13,12 +13,16 @@ from fthmc.utils.logger import Logger, check_else_make_dir, in_notebook, savez
 import time
 
 import fthmc.utils.qed_helpers as qed
-#  from fthmc.train import get_observables  # , update_history
 from math import pi as PI
 
 
 logger = Logger()
 TWO_PI = 2. * PI
+
+
+# -----------------------------------------------------------------
+# TODO: Rewrite HMC as an object similar to `FieldTransformation`
+# -----------------------------------------------------------------
 
 
 def grab(x: torch.Tensor):
@@ -52,6 +56,7 @@ def run_hmc(
         param: Param,
         x: torch.Tensor = None,
         #  keep_fields: bool = True,
+        figsize: tuple = None,
         plot_metrics: bool = True,
         #  colors: list = None,
         #  nprint: int = 1,
@@ -62,7 +67,8 @@ def run_hmc(
     Explicitly, we perform `param.nrun` independent experiments, where each
     experiment consists of generating `param.ntraj` trajectories.
     """
-    logdir = os.path.join(LOGS_DIR, 'hmc', param.uniquestr())
+    #  logdir = os.path.join(LOGS_DIR, 'hmc', param.uniquestr())
+    logdir = param.logdir
     if os.path.isdir(logdir):
         logdir = io.tstamp_dir(logdir)
 
@@ -78,25 +84,11 @@ def run_hmc(
     fields_arr = []
     ylabels = ['acc', 'dq', 'plaq']
     xlabels = len(ylabels) * ['trajectory']
-    plots = init_live_plots(param=param,  # config=config,
-                            xlabels=xlabels, ylabels=ylabels)
-    #  plots_acc = plotter.init_live_plot(dpi=dpi,
-    #                                     figsize=figsize,
-    #                                     ylabel='acc',
-    #                                     color='#F92672',
-    #                                     param=self.param,
-    #                                     xlabel='trajectory',
-    #                                     config=self.config)
-    #  plots_dqsq = plotter.init_live_plot(dpi=dpi,
-    #                                      figsize=figsize,
-    #                                      color='#00CCff',
-    #                                      ylabel='dqsq',
-    #                                      xlabel='trajectory')
-    #  plots_plaq = plotter.init_live_plot(figsize=figsize,
-    #                                      dpi=dpi,
-    #                                      color='#ffff00',
-    #                                      ylabel='plaq',
-    #                                      xlabel='trajectory')
+    plots = {}
+    if in_notebook():
+        plots = init_live_plots(param=param,  figsize=figsize,  # config=config,
+                                xlabels=xlabels, ylabels=ylabels)
+
     for n in range(param.nrun):
         t0 = time.time()
 
@@ -109,20 +101,15 @@ def run_hmc(
 
         logger.print_metrics({'plaq': p, 'q': q})
         xarr = []
-        history = {
-            'dt': [torch.tensor(0.)],
-            'traj': [0],
-            'acc': [torch.tensor(1.)],
-            'dH': [torch.tensor(0.)],
-            'q': [q],
-            'dq': [0],
-            'plaq': [p],
-        }
+        history = {}
         for i in range(param.ntraj):
             t1 = time.time()
             dH, exp_mdH, acc, x = qed.hmc(param, x, verbose=False)
 
-            qold = history['q'][-1]
+            try:
+                qold = history['q'][-1]
+            except KeyError:
+                qold = q
             qnew = qed.batch_charges(x)
             dq = torch.sqrt((qnew - qold) ** 2)
 
@@ -133,11 +120,11 @@ def run_hmc(
             metrics = {
                 'traj': n * param.ntraj + i + 1,
                 'dt': time.time() - t1,
-                'acc': acc,  # 'True' if acc else 'False',
+                'acc': acc.to(DTYPE),  # 'True' if acc else 'False',
                 'dH': dH,
+                'plaq': plaq,
                 'q': int(qnew),
                 'dq': dq,
-                'plaq': plaq,
             }
             for k, v in metrics.items():
                 try:
@@ -145,7 +132,6 @@ def run_hmc(
                 except KeyError:
                     history[k] = [v]
 
-            #  if (i - 1) % (param.ntraj // param.nprint) == 0:
             if (i - 1) % param.nprint == 0:
                 _ = logger.print_metrics(metrics)
 
@@ -165,8 +151,9 @@ def run_hmc(
         if plot_metrics:
             outdir = os.path.join(plots_dir, f'run{n}')
             check_else_make_dir(outdir)
-            plot_history(history, param, therm_frac=0.0,
-                         xlabel='traj', outdir=outdir)
+            plot_history(history, param, therm_frac=THERM_FRAC,
+                         xlabel='traj', outdir=outdir,
+                         num_chains=CHAINS_TO_PLOT)
 
     run_times_strs = [f'{dt:.4f}' for dt in run_times]
     dt_strs = [f'{dt/param.ntraj:.4f}' for dt in run_times]
@@ -174,7 +161,7 @@ def run_hmc(
     logger.log(f'Run times: {run_times_strs}')
     logger.log(f'Per trajectory: {dt_strs}')
 
-    hfile = os.path.join(logdir, f'hmc_histories.z')
+    hfile = os.path.join(logdir, 'hmc_histories.z')
     io.save_history(histories, hfile, name='hmc_histories')
 
     xfile = os.path.join(logdir, 'hmc_fields_arr.z')
