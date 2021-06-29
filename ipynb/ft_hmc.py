@@ -8,6 +8,18 @@ from timeit import default_timer as timer
 from functools import reduce
 from field_transformation import *
 
+# statistics
+
+def flattern(l):
+    return [x for y in l for x in y]
+
+def average(l):
+    return sum(l) / len(l)
+
+def sub_avg(l):
+    avg = average(l)
+    return np.array([x - avg for x in l])
+
 # From Xiao-Yong
 
 class Param:
@@ -42,9 +54,9 @@ seed = {self.seed}
 nth = {self.nth}
 nth_interop = {self.nth_interop}
 """
-    def uniquestr(self):
+    def uniquestr(self, tag = ""):
         lat = ".".join(str(x) for x in self.lat)
-        return f"out_l{lat}_b{self.beta}_n{self.ntraj}_t{self.tau}_s{self.nstep}.out"
+        return f"out_b{self.beta}_l{lat}_n{self.ntraj}_t{self.tau}_s{self.nstep}{tag}.out"
 
 def action(param, f):
     return (-param.beta)*torch.sum(torch.cos(plaqphase(f)))
@@ -67,16 +79,33 @@ def regularize(f):
     f_ = (f - math.pi) / p2
     return p2*(f_ - torch.floor(f_) - 0.5)
 
+hmc_info_list = []
+
 def leapfrog(param, x, p):
+    mom_norm = torch.sum(p*p)
+    info_list = []
     dt = param.dt
     x_ = x + 0.5*dt*p
     f = force(param, x_)
     p_ = p + (-dt)*f
+    info = np.array((float(torch.linalg.norm(f)),
+                     float(action(param, x_)),
+                     float(torch.sum(p*p_)/np.sqrt(mom_norm*torch.sum(p_*p_)))))
+    info_list.append(info)
     print(f'plaq(x) {action(param, x) / (-param.beta*param.volume)}  force.norm {torch.linalg.norm(f)}')
     for i in range(param.nstep-1):
         x_ = x_ + dt*p_
-        p_ = p_ + (-dt)*force(param, x_)
+        f = force(param, x_)
+        info = np.array((float(torch.linalg.norm(f)),
+                        float(action(param, x_)),
+                        float(torch.sum(p*p_)/np.sqrt(mom_norm*torch.sum(p_*p_)))))
+        info_list.append(info)
+        p_ = p_ + (-dt)*f
     x_ = x_ + 0.5*dt*p_
+    print(np.sqrt(average([l[0]**2 for l in info_list])),
+          (info_list[0][1], info_list[-1][1]),
+          info_list[-1][2])
+    hmc_info_list.append(info_list)
     return (x_, p_)
 
 def hmc(param, x):
@@ -94,10 +123,24 @@ def hmc(param, x):
 
 put = lambda s: sys.stdout.write(s)
 
+def show_hmc_stats():
+    fl_list = flattern(hmc_info_list)
+    l_len = len(fl_list)
+    fl_list = fl_list[l_len // 2:]
+    action_list = np.array([l[1] for l in fl_list])
+    action_list = sub_avg(action_list)
+    print("action sigma", np.sqrt(average(action_list**2)))
+    force_list = np.array([l[0] for l in fl_list])
+    print("avg force", np.sqrt(average(force_list**2)))
+
 def run(param, field = None):
     if field is None:
         field = param.initializer()
-    with open(param.uniquestr(), "w") as O:
+    hmc_info_list.clear()
+    fn = param.uniquestr()
+    if os.path.exists(fn):
+        return field
+    with open(fn, "w") as O:
         params = param.summary()
         O.write(params)
         put(params)
@@ -120,6 +163,7 @@ def run(param, field = None):
             ts.append(t)
         print("Run times: ", ts)
         print("Per trajectory: ", [t/param.ntraj for t in ts])
+    show_hmc_stats()
     return field
 
 # End from Xiao-Yong
@@ -223,13 +267,13 @@ def flow_train(param, with_force = False, pre_model = None):  # packaged from or
     set_weights(layers)
     model = {'layers': layers, 'prior': prior}
     # Training
-    base_lr = .001
+    base_lr = .0001
     optimizer = torch.optim.Adam(model['layers'].parameters(), lr=base_lr)
     optimizer_wf = torch.optim.Adam(model['layers'].parameters(), lr=base_lr / 100.0)
     #
     # ADJUST ME
     N_era = 10
-    N_epoch = 100
+    N_epoch = 30
     #
     batch_size = 64
     print_freq = N_epoch # epochs
@@ -259,7 +303,6 @@ def flow_eval(model, u1_action):  # packaged from original ipynb by Xiao-Yong Ji
     Q = grab(topo_charge(torch.stack(u1_ens['x'], axis=0)))
     X_mean, X_err = bootstrap(Q**2, Nboot=100, binsize=16)
     print(f'Topological susceptibility = {X_mean:.2f} +/- {X_err:.2f}')
-    print(f'... vs HMC estimate = 1.23 +/- 0.02')
 
 def train_load_save(param):
     lat = "x".join(str(x) for x in param.lat)
@@ -345,8 +388,11 @@ def ft_hmc(param, flow, field):
 def ft_run(param, flow, field = None):
     if field == None:
         field = param.initializer()
-    ft_hmc_info_list = []
-    with open(param.uniquestr(), "w") as O:
+    ft_hmc_info_list.clear()
+    fn = param.uniquestr("_ft")
+    if os.path.exists(fn):
+        return field
+    with open(fn, "w") as O:
         params = param.summary()
         O.write(params)
         put(params)
@@ -366,13 +412,23 @@ def ft_run(param, flow, field = None):
                 ifacc = "ACCEPT" if acc else "REJECT"
                 status = f"Traj: {n*param.ntraj+i+1:4}  {ifacc}  dH: {dH:< 12.8}  exp(-dH): {exp_mdH:< 12.8}  plaq: {plaq:< 12.8}  topo: {topo:< 3.3}\n"
                 O.write(status)
-                if (i+1) % (param.ntraj//param.nprint) == 0:
-                    put(status)
+                put(status)
             t += timer()
             ts.append(t)
         print("Run times: ", ts)
         print("Per trajectory: ", [t/param.ntraj for t in ts])
+    show_fthmc_stats()
     return field
+
+def show_fthmc_stats():
+    fl_list = flattern(ft_hmc_info_list)
+    l_len = len(fl_list)
+    fl_list = fl_list[l_len // 2:]
+    action_list = np.array([l[1] for l in fl_list])
+    action_list = sub_avg(action_list)
+    print("action sigma", np.sqrt(average(action_list**2)))
+    force_list = np.array([l[0] for l in fl_list])
+    print("avg force", np.sqrt(average(force_list**2)))
 
 # change size
 
@@ -402,25 +458,6 @@ def flow_resize(flow, lat_new):
     # e.g. lat_new = (32, 32)
     return make_u1_equiv_layers_net(lattice_shape = lat_new, nets = get_nets(flow))
 
-# statistics
-
-def flattern(l):
-    return [x for y in l for x in y]
-
-def average(l):
-    return sum(l) / len(l)
-
-def sub_avg(l):
-    avg = average(l)
-    return np.array([x - avg for x in l])
-
-def show_fthmc_stats():
-    action_list = np.array([l[1] for l in flattern(ft_hmc_info_list)])
-    action_list = sub_avg(action_list)
-    print("action sigma", np.sqrt(average(action_list**2)))
-    force_list = np.array([l[0] for l in flattern(ft_hmc_info_list)])
-    print("avg force", np.sqrt(average(force_list**2)))
-
 # set param
 
 # ADJUST ME
@@ -438,8 +475,6 @@ os.environ["KMP_AFFINITY"]= "granularity=fine,verbose,compact,1,0"
 
 beta_sim = 5.0
 
-ntraj_hmc = 16 * 1024
-
 lat_train = (16, 16)
 
 lat_large = (32, 32)
@@ -449,7 +484,7 @@ lat_large = (32, 32)
 param_run_hmc = Param(
     beta = beta_sim,
     lat = lat_train,
-    tau = 1,
+    tau = 1.0,
     nstep = 32,
     ntraj = 128,
     )
@@ -457,7 +492,7 @@ param_run_hmc = Param(
 param_run_hmc_large = Param(
     beta = beta_sim,
     lat = lat_large,
-    tau = 1,
+    tau = 1.0,
     nstep = 32,
     ntraj = 128,
     )
@@ -470,16 +505,16 @@ param_train = Param(
 param_run_fthmc = Param(
     beta = beta_sim,
     lat = lat_train,
-    tau = 1,
-    nstep = 128,
+    tau = 1.0,
+    nstep = 64,
     ntraj = 128,
     )
 
 param_run_fthmc_large = Param(
     beta = beta_sim,
     lat = lat_large,
-    tau = 1,
-    nstep = 128,
+    tau = 1.0,
+    nstep = 64,
     ntraj = 128,
     )
 
@@ -493,10 +528,6 @@ flow = train_load_save(param_train)
 
 field_fthmc = ft_run(param_run_fthmc, flow)
 
-show_fthmc_stats()
-
-field_fthm_large = cft_run(param_run_fthmc_large, flow_resize(flow, param_run_fthmc_large.lat))
-
-show_fthmc_stats()
+field_fthm_large = ft_run(param_run_fthmc_large, flow_resize(flow, param_run_fthmc_large.lat))
 
 print("finished")
