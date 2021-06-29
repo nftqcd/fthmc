@@ -4,6 +4,7 @@ import torch
 import math
 import sys
 import os
+import numpy as np
 from timeit import default_timer as timer
 from functools import reduce
 from field_transformation import *
@@ -16,9 +17,40 @@ def flattern(l):
 def average(l):
     return sum(l) / len(l)
 
+def sigma(l):
+    avg = average(l)
+    sq_avg = average([ np.square(v - avg) for v in l ])
+    return sq_avg / np.sqrt(len(l) - 1)
+
 def sub_avg(l):
     avg = average(l)
     return np.array([x - avg for x in l])
+
+n_block = 16 # ADJUST ME
+
+def block_list(l):
+    n_block_local = n_block
+    size_block = len(l) // n_block_local
+    if size_block < 1:
+        size_block = 1
+        n_block_local = len(l)
+    if n_block_local == 0:
+        return []
+    start = len(l) - n_block_local * size_block
+    return [ l[ start + i * size_block : start + (i+1) * size_block] for i in range(n_block_local) ]
+
+def change_sqr(l, lp):
+    size = min(len(l), len(lp))
+    if size == 0:
+        return []
+    vs = [ np.square(l[i] - lp[i]) for i in range(size) ]
+    vs = list(map(average, block_list(vs)))
+    avg = average(vs)
+    sig = sigma(vs)
+    return [ avg, sig ]
+
+def change_sqr_vs_dt(l, dt_range = 10):
+    return [ [ i ] + change_sqr(l, l[i:]) for i in range(1, dt_range + 1)]
 
 # From Xiao-Yong
 
@@ -133,10 +165,23 @@ def show_hmc_stats():
     force_list = np.array([l[0] for l in fl_list])
     print("avg force", np.sqrt(average(force_list**2)))
 
+def save_topo_change_sqr(fn):
+    size_hist = len(topo_history)
+    drop_len = size_hist // 3 # ADJUST ME
+    with open(fn, 'w') as f:
+        dt = change_sqr_vs_dt(topo_history[drop_len:])
+        for l in dt:
+            print(l)
+            f.write(f"{l[0]} {l[1]} {l[2]}\n")
+    sys.stdout.flush()
+
+topo_history = []
+
 def run(param, field = None):
     if field is None:
         field = param.initializer()
     hmc_info_list.clear()
+    topo_history.clear()
     fn = param.uniquestr()
     if os.path.exists(fn):
         return field
@@ -159,11 +204,15 @@ def run(param, field = None):
                 status = f"Traj: {n*param.ntraj+i+1:4}  {ifacc}  dH: {dH:< 12.8}  exp(-dH): {exp_mdH:< 12.8}  plaq: {plaq:< 12.8}  topo: {topo:< 3.3}\n"
                 O.write(status)
                 put(status)
+                topo_history.append(topo.item())
+                sys.stdout.flush()
             t += timer()
             ts.append(t)
         print("Run times: ", ts)
         print("Per trajectory: ", [t/param.ntraj for t in ts])
     show_hmc_stats()
+    fn = param.uniquestr("_topo")
+    save_topo_change_sqr(fn)
     return field
 
 # End from Xiao-Yong
@@ -389,6 +438,7 @@ def ft_run(param, flow, field = None):
     if field == None:
         field = param.initializer()
     ft_hmc_info_list.clear()
+    topo_history.clear()
     fn = param.uniquestr("_ft")
     if os.path.exists(fn):
         return field
@@ -413,11 +463,15 @@ def ft_run(param, flow, field = None):
                 status = f"Traj: {n*param.ntraj+i+1:4}  {ifacc}  dH: {dH:< 12.8}  exp(-dH): {exp_mdH:< 12.8}  plaq: {plaq:< 12.8}  topo: {topo:< 3.3}\n"
                 O.write(status)
                 put(status)
+                topo_history.append(topo.item())
+                sys.stdout.flush()
             t += timer()
             ts.append(t)
         print("Run times: ", ts)
         print("Per trajectory: ", [t/param.ntraj for t in ts])
     show_fthmc_stats()
+    fn = param.uniquestr("_ft_topo")
+    save_topo_change_sqr(fn)
     return field
 
 def show_fthmc_stats():
