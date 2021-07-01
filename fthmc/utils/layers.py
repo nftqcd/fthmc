@@ -17,17 +17,22 @@ import numpy as np
 import packaging.version
 import torch
 from torch import nn as nn
-#  from torch import nn
 
 from fthmc.config import DEVICE, npDTYPE
+from fthmc.utils.logger import Logger
 from fthmc.utils.qed_helpers import compute_u1_plaq
 
+#  from torch import nn
+
+
 TWO_PI = 2 * PI
+
+logger = Logger()
 
 TOL = 1e-6
 if torch.cuda.is_available():
     WITH_CUDA = True
-    TOL = 1e-3
+    TOL = 1e-6
 
 
 # pylint:disable=missing-function-docstring
@@ -98,6 +103,25 @@ def make_net_from_layers(*, lattice_shape: tuple[int], nets: list[nn.Module]):
     return nn.ModuleList(layers)
 
 
+ACTIVATION_FNS = {
+    'relu': nn.ReLU(),
+    'silu': nn.SiLU(),
+    'leaky_relu': nn.LeakyReLU(),
+}
+def get_activation_fn(actfn: str = None):
+    if actfn is None:
+        return nn.SiLU()
+
+    actfn = ACTIVATION_FNS.get(str(actfn).lower(), None)
+    if actfn is None:
+        logger.log(f'Activation fn: {actfn} not found. '
+                   f'Must be one of ["relu", "silu", "leaky_relu"]')
+        logger.log(f'Falling back to: nn.SiLU()')
+        return nn.SiLU()
+
+    return actfn
+
+
 def make_conv_net(
         *,
         hidden_sizes: list[int],
@@ -105,21 +129,31 @@ def make_conv_net(
         in_channels: int,
         out_channels: int,
         use_final_tanh: bool = False,
+        activation_fn: str = None,
 ):
-    sizes = [in_channels] + hidden_sizes + [out_channels]
-    assert packaging.version.parse(torch.__version__) >= packaging.version.parse('1.5.0')
-    assert kernel_size % 2 == 1, 'kernel size must be odd for PyTorch >= 1.5.0'
-    padding_size = (kernel_size // 2)
+    assert kernel_size % 2 == 1, 'kernel size must be odd for PyTorch>=1.5.0'
+    assert (packaging.version.parse(torch.__version__)
+            >= packaging.version.parse('1.5.0'))
+
     net = []
+    padding_size = (kernel_size // 2)
+    act_fn = get_activation_fn(actfn=activation_fn)
+    sizes = [in_channels] + hidden_sizes + [out_channels]
     for i in range(len(sizes) - 1):
-        net.append(nn.Conv2d(
-            sizes[i], sizes[i+1], kernel_size, padding=padding_size,
-            stride=1, padding_mode='circular'))
+        conv = nn.Conv2d(sizes[i], sizes[i+1], kernel_size,
+                         padding=padding_size, stride=1,
+                         padding_mode='circular')
+        net.append(conv)
+        #  net.append(nn.Conv2d(sizes[i], sizes[i+1],
+        #                       kernel_size,
+        #                       padding=padding_size,
+        #                       stride=1, padding_mode='circular'))
         if i != len(sizes) - 2:
-            net.append(nn.SiLU())
+            net.append(act_fn)
         else:
             if use_final_tanh:
                 net.append(nn.Tanh())
+
     return nn.Sequential(*net)
 
 
@@ -358,7 +392,8 @@ def make_u1_equiv_layers(
         n_mixture_comps,
         lattice_shape,
         hidden_sizes,
-        kernel_size
+        kernel_size,
+        activation_fn: str = None,
 ):
     layers = []
     for i in range(n_layers):
@@ -367,14 +402,18 @@ def make_u1_equiv_layers(
         off = (i//2) % 4
         in_channels = 2 # x - > (cos(x), sin(x))
         out_channels = n_mixture_comps + 1 # for mixture s and t, respectively
-        net = make_conv_net(in_channels=in_channels, out_channels=out_channels,
-            hidden_sizes=hidden_sizes, kernel_size=kernel_size,
-            use_final_tanh=False)
-        plaq_coupling = NCPPlaqCouplingLayer(
-            net, mask_shape=lattice_shape, mask_mu=mu, mask_off=off)
-        link_coupling = GaugeEquivCouplingLayer(
-            lattice_shape=lattice_shape, mask_mu=mu, mask_off=off,
-            plaq_coupling=plaq_coupling)
+        net = make_conv_net(in_channels=in_channels,
+                            out_channels=out_channels,
+                            hidden_sizes=hidden_sizes,
+                            kernel_size=kernel_size,
+                            use_final_tanh=False,
+                            activation_fn=activation_fn)
+        plaq_coupling = NCPPlaqCouplingLayer(net,
+                                             mask_shape=lattice_shape,
+                                             mask_mu=mu, mask_off=off)
+        link_coupling = GaugeEquivCouplingLayer(lattice_shape=lattice_shape,
+                                                mask_mu=mu, mask_off=off,
+                                                plaq_coupling=plaq_coupling)
         layers.append(link_coupling)
 
     return nn.ModuleList(layers)

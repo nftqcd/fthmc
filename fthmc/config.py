@@ -57,10 +57,11 @@ logger.log(f'TORCH DTYPE: {DTYPE}')
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS_DIR = os.path.join(PROJECT_DIR, 'logs')
 
-GREEN = '#87ff00'
+RED = '#FF4050'
+BLUE = '#007DFF'
 PINK = '#F92672'
-BLUE = '#007dff'
-RED = '#ff4050'
+GREEN = '#87ff00'
+YELLOW = '#FFFF00'
 
 NOW = get_timestamp('%Y-%m-%d-%H%M%S')
 METRIC_NAMES = ['dt', 'accept', 'traj', 'dH', 'expdH', 'plaq', 'charge']
@@ -180,19 +181,23 @@ class Param:
             f's{self.nstep}',
         ]
         ustr = '_'.join(pstr)
-        #  if ext is not None:
-        #      ustr = f'{ustr}.ext'
 
         return ustr
 
 
 @dataclass
 class ftConfig:
-    tau: float
-    nstep: int
+    tau: float  # trajectory length
+    nstep: int  # number of leapfrog steps per trajectory
 
     def __post_init__(self):
-        self.dt = self.tau / self.nstep
+        self.dt = self.tau / self.nstep  # step size
+
+    def __repr__(self):
+        s = '\n'.join(
+            '='.join((str(k), str(v))) for k, v in self.__dict__.items()
+        )
+        return '\n'.join(['ftConfig:', 12 * '-', s])
 
     def uniquestr(self):
         pstr = [
@@ -210,17 +215,18 @@ class TrainConfig:
     L: int
     beta: float
     restore: bool = False
-    n_era: int = 10             # Each `era` consists of `n_epoch` epochs
-    n_epoch: int = 100          # Number of `epochs` (loss + backprop)
-    batch_size: int = 64        # Number of chains to maintain in parallel
-    base_lr: float = 0.001      # Base learning rate
-    n_s_nets: int = 2           # Number of (RealNVP) coupling layers, `s_net`
-    n_layers: int = 24          # Number of hidden layers in each `s_net`
-    kernel_size: int = 3        # Kernel size in Conv2D layers
-    with_force: bool = False    # Minimize force norm during training
-    print_freq: int = 50        # How frequently to print training metrics
-    plot_freq: int = 50         # How frequently to update training plots
-    log_freq: int = 50          # How frequently to log TensorBoard summaries
+    activation_fn: str = 'silu'  # activation to use in ConvNet
+    n_era: int = 10              # Each `era` consists of `n_epoch` epochs
+    n_epoch: int = 100           # Number of `epochs` (loss + backprop)
+    batch_size: int = 64         # Number of chains to maintain in parallel
+    base_lr: float = 0.001       # Base learning rate
+    n_s_nets: int = 2            # Number of (RealNVP) coupling layers, `s_net`
+    n_layers: int = 24           # Number of hidden layers in each `s_net`
+    kernel_size: int = 3         # Kernel size in Conv2D layers
+    with_force: bool = False     # Minimize force norm during training
+    print_freq: int = 50         # How frequently to print training metrics
+    plot_freq: int = 50          # How frequently to update training plots
+    log_freq: int = 50           # How frequently to log TensorBoard summaries
     # Sizes of hidden layers between convolutional layers
     hidden_sizes: list[int] = field(default_factory=lambda: [8, 8])
 
@@ -264,6 +270,7 @@ class TrainConfig:
             f'L{self.L}',
             f'b{self.beta}',
             f'nb{self.batch_size}',
+            f'act{self.activation_fn}',
             f'nh{self.n_layers}',
             f'ns{self.n_s_nets}',
             f'ks{self.kernel_size}',
