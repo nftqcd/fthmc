@@ -7,7 +7,7 @@ from __future__ import absolute_import, annotations, division, print_function
 
 import time
 from math import pi as PI
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -214,6 +214,39 @@ class FieldTransformation(nn.Module):
 
         return xout, metrics
 
+    def _batch_hmc(
+            self,
+            x: torch.Tensor,
+            step: int = None,
+    ):
+        t0 = time.time()
+        metrics = {}  # type: dict[str, Union[torch.Tensor, float]]
+        if step is not None:
+            metrics['traj'] = step
+
+        x0, _ = self.flow_backward(x)
+        v0 = torch.randn_like(x0)
+        h0 = self.calc_energy(x0, v0)
+
+        x1, v1 = self.leapfrog(x0, v0)
+        x1 = self.wrap(x1)
+        h1 = self.calc_energy(x1, v1)
+
+        dh = h1 - h0
+        exp_mdh = torch.exp(-dh)
+        acc = (torch.rand_like(exp_mdh) < exp_mdh).to(DTYPE)
+        m = acc[:, None].to(torch.uint8)
+        x_ = m * x1.flatten(start_dim=1) + (1 - m) * x0.flatten(start_dim=1)
+        x_ = x_.reshape(x0.shape)
+        xout, _ = self.flow_forward(x_)
+        metrics.update({
+            'dt': time.time() - t0,
+            'acc': acc,
+            'dh': dh,
+            'exp_mdh': exp_mdh,
+        })
+        return xout.detach(), metrics
+
     def initializer(self, rand: bool = True):
         nd = self.config.nd
         lat = self.config.lat
@@ -223,7 +256,6 @@ class FieldTransformation(nn.Module):
             x = torch.zeros([nd, ] + lat)
 
         return x[None, :]
-
 
     def lattice_metrics(self, x: torch.Tensor, qold: torch.Tensor):
         q = self._charge_fn(x).detach()
@@ -298,8 +330,8 @@ class FieldTransformation(nn.Module):
             if i % nprint == 0:
                 logger.print_metrics(metrics)  # , pre=pre)
 
-            if plotdir is not None and in_notebook():
-                plotter.save_live_plots(plots, outdir=plotdir)
+        if plotdir is not None and in_notebook():
+            plotter.save_live_plots(plots, outdir=plotdir)
 
         #  histories[n] = history
         plotter.plot_history(history,
