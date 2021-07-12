@@ -6,6 +6,7 @@ Executable for training the flow model from the CLI.
 from __future__ import absolute_import, annotations, division, print_function
 
 import argparse
+from dataclasses import asdict
 import datetime
 import json
 import os
@@ -23,13 +24,14 @@ if modulepath not in sys.path:
 
 import fthmc.utils.io as io
 import fthmc.utils.qed_helpers as qed
-from fthmc.config import CHAINS_TO_PLOT, DPI, FIGSIZE, KWARGS, NUM_SAMPLES, PI, Param, SchedulerConfig, THERM_FRAC, TrainConfig, ftConfig
+from fthmc.config import CHAINS_TO_PLOT, DPI, FIGSIZE, FlowModel, KWARGS, NUM_SAMPLES, PI, Param, SchedulerConfig, THERM_FRAC, TrainConfig, ftConfig
 from fthmc.field_transformation import FieldTransformation
 from fthmc.hmc import run_hmc
-from fthmc.train import train
+from fthmc.train import train, transfer_to_new_lattice
 from fthmc.utils.distributions import MultivariateUniform
 from fthmc.utils.plot_helpers import plot_history
-from fthmc.utils.samplers import make_mcmc_ensemble
+#  from fthmc.utils.samplers import make_mcmc_ensemble
+from fthmc.utils.inference import make_mcmc_ensemble, U1GaugeAction
 
 
 #  from fthmc.utils.parse_configs import parse_configs
@@ -63,15 +65,15 @@ def hmc(param: Param, x: torch.Tensor = None):
     return run_hmc(param, x=x)
 
 
-def fthmc(
-    flow: torch.nn.ModuleList,
-    config: TrainConfig,
-    ftconfig: ftConfig,
-    xi: torch.Tensor = None,
-    nprint: int = 1,
-    nplot: int = 1,
-    window: int = 1,
-    num_trajs: int = 1024,
+def run_fthmc(
+        flow: nn.ModuleList,
+        config: TrainConfig,
+        ftconfig: ftConfig,
+        xi: torch.Tensor = None,
+        nprint: int = 50,
+        nplot: int = 10,
+        window: int = 1,
+        num_trajs: int = 1024,
 ):
     logger.rule(f'Running `ftHMC` using trained flow for {num_trajs} trajs')
     if torch.cuda.is_available():
@@ -86,23 +88,24 @@ def fthmc(
     pdir = os.path.join(fthmcdir, 'plots')
     sdir = os.path.join(fthmcdir, 'summaries')
     writer = SummaryWriter(log_dir=sdir)
-    history = ft.run(x=xi, writer=writer, plotdir=pdir,
-                     nprint=nprint, nplot=nplot,
-                     window=window, num_trajs=num_trajs)
+    history = ft.run(x=xi, nprint=nprint, nplot=nplot, window=window,
+                    num_trajs=num_trajs, writer=writer, plotdir=pdir)
 
     return {'field_transformation': ft, 'history': history}
 
 
 def train_and_evaluate(
         train_config: TrainConfig,
+        model: nn.ModuleList = None,
+        pre_model: nn.ModuleList = None,
+        dpi: int = DPI,
+        figsize: tuple = FIGSIZE,
+        num_samples: int = NUM_SAMPLES,
+        ftconfig: ftConfig = None,
+        num_fthmc_trajs: int = 1024,
+        chains_to_plot: int = CHAINS_TO_PLOT,
+        therm_frac: float = THERM_FRAC,
         scheduler_config: SchedulerConfig = None,
-        model: Optional[nn.ModuleList] = None,
-        pre_model: Optional[nn.ModuleList] = None,
-        dpi: Optional[int] = DPI,
-        figsize: Optional[tuple] = FIGSIZE,
-        num_samples: Optional[int] = NUM_SAMPLES,
-        chains_to_plot: Optional[int] = CHAINS_TO_PLOT,
-        therm_frac: Optional[float] = THERM_FRAC,
 ):
     # ----------------------------------------------------------
     # TODO: Deal with loading / restoring model from checkpoint
@@ -113,44 +116,111 @@ def train_and_evaluate(
     if scheduler_config is not None:
         logger.log(scheduler_config)
 
-    train_outputs = train(config=train_config,
-                          model=model,
-                          pre_model=pre_model,
-                          dpi=dpi,
-                          figsize=figsize,
-                          scheduler_config=scheduler_config)
+    train_out = train(config=train_config, model=model,
+                      pre_model=pre_model, figsize=figsize,
+                      dpi=dpi, scheduler_config=scheduler_config)
 
-    history = None
+    history = {}
     if num_samples > 0:
         logger.rule(f'Using trained model to generate {num_samples} samples')
-        action_fn = qed.BatchAction(train_config.beta)
-        dirs = train_outputs['dirs']
+        #  action_fn = qed.BatchAction(train_config.beta)
+        action_fn = U1GaugeAction(train_config.beta)
+        dirs = train_out['dirs']
         logdir = dirs['logdir']
         inf_dir = os.path.join(logdir, 'inference')
         inf_pdir = os.path.join(inf_dir, 'plots')
-        nb = train_config.batch_size
-        model = train_outputs['model']
-        history = make_mcmc_ensemble(model=model,
-                                     batch_size=nb,
+        history = make_mcmc_ensemble(model=train_out['model'],
                                      action_fn=action_fn,
-                                     num_samples=num_samples)
+                                     num_samples=num_samples,
+                                     batch_size=train_config.batch_size)
         plot_history(history=history, config=train_config,
                      num_chains=chains_to_plot, skip=['epoch', 'x'],
                      therm_frac=therm_frac, xlabel='MC Step', outdir=inf_pdir)
 
-    return {'training': train_outputs, 'inference': history}
+    fthmc_out = {}
+    if ftconfig is not None and num_fthmc_trajs > 0:
+        flow = train_out['model'].layers
+        fthmc_out = run_fthmc(flow=flow,
+                              num_trajs=num_fthmc_trajs,
+                              config=train_config,
+                              ftconfig=ftconfig)
+
+    return {'training': train_out, 'inference': history, 'fthmc': fthmc_out}
 
 
-def main(
-        configs: dict,
-        xinit: Optional[torch.Tensor] = None,
+def transfer(
+        L: int,
+        config: TrainConfig,
+        layers: nn.ModuleList,
+        ftconfig: ftConfig,
+        param: Param = None,
+        new_lr: float = None,
+        run_hmc: bool = True,
+        figsize: tuple = None,
         num_fthmc_trajs: int = 1024,
-        model: Optional[nn.ModuleList] = None,
-        pre_model: Optional[nn.ModuleList] = None,
+        scheduler_config: SchedulerConfig = None,
 ):
-    param = configs.get('param', None)
-    ftconfig = configs.get('ftconfig', None)
+    logger.rule(f'Transferring trained model to {L}x{L} lattice')
+    if figsize is None:
+        figsize = (9, 2)
+
+    xfr = transfer_to_new_lattice(L_new=L, layers=layers, config=config)
+    config_new = xfr['config']
+    model_new = xfr['model']
+    logdir = os.path.join(config.logdir,
+                          f'transferred_{L}x{L}',
+                          f'beta{config_new.beta}',
+                          config_new.uniquestr())
+    io.check_else_make_dir(logdir)
+    if run_hmc and param is not None:
+        param_ = asdict(param)
+        param_['L'] = config_new.L
+        param_new = Param(**param_)
+        hmc_fields, hmc_history = hmc(param_new)
+
+    if new_lr is not None:
+        cfg = asdict(config_new)
+        cfg['base_lr'] = new_lr
+        config_new = TrainConfig(**cfg)
+
+    outputs = train_and_evaluate(config_new,
+                                 model=model_new,
+                                 figsize=figsize,
+                                 ftconfig=ftconfig,
+                                 num_fthmc_trajs=num_fthmc_trajs,
+                                 scheduler_config=scheduler_config)
+    #  flow = train_outputs['tra
+    #  fthmc_outputs = run_fthmc(flow=train_outputs['model'].layers,
+    #                            num_trajs=num_fthmc_trajs,
+    #                            config=config_new, ftconfig=ftconfig)
+    return {
+        'config': config_new,
+        'model': model_new,
+        'train_outputs': outputs['training'],
+        'inference_outputs': outputs['inference'],
+        'fthmc_outputs': outputs['fthmc'],
+    }
+
+
+def setup(
+        configs: dict,
+):
     train_config = configs.get('train_config', None)
+    assert train_config is not None
+    train_config = TrainConfig(**train_config)
+
+    param = configs.get('param', None)
+    if param is not None:
+        param = Param(**param)
+
+    ftconfig = configs.get('ftconfig', None)
+    if ftconfig is not None:
+        ftconfig = ftConfig(**ftconfig)
+    else:
+        logger.log('Setting `ftConfig.tau, `ftConfig.nstep` using `Param`')
+        assert param is not None
+        ftconfig = ftConfig(tau=param.tau, nstep=param.nstep)
+
     scheduler_config = configs.get('scheduler_config', None)
     #  model = configs.get('model', None)
     #  pre_model = configs.get('pre_model', None)
@@ -158,40 +228,64 @@ def main(
     if kwargs is None:
         kwargs = KWARGS
 
-    hmc_outputs = None
-    if param is not None:
-        param = Param(**param)
-        hmc_outputs = hmc(param, x=xinit)
-
-    if train_config is None:
-        raise ValueError(f'Expected `train_config` in configs.')
-
-    train_config = TrainConfig(**train_config)
-
     if scheduler_config is not None:
         scheduler_config = SchedulerConfig(**scheduler_config)
 
-    if ftconfig is not None:
-        ftconfig = ftConfig(**ftconfig)
-    else:
-        logger.log('Setting `ftConfig.tau, `ftConfig.nstep` using `Param`')
+    return {
+        'param': param,
+        'train_config': train_config,
+        'ftconfig': ftconfig,
+        'scheduler_config': scheduler_config,
+        'kwargs': kwargs
+    }
+
+
+def main(
+        config: TrainConfig,
+        param: Param = None,
+        ftconfig: ftConfig = None,
+        pre_model: FlowModel = None,
+        scheduler_config: SchedulerConfig = None,
+        **kwargs,
+):
+    num_fthmc_trajs = kwargs.get('num_fthmc_trajs', 1024)
+    hmc_out = None if param is None else hmc(param)
+    if ftconfig is None:
+        assert param is not None
         ftconfig = ftConfig(tau=param.tau, nstep=param.nstep)
 
-    outputs = train_and_evaluate(train_config=train_config,
+    outputs = train_and_evaluate(train_config=config,
+                                 ftconfig=ftconfig,
+                                 num_fthmc_trajs=1024,
                                  scheduler_config=scheduler_config,
-                                 model=model, pre_model=pre_model, **kwargs)
-    fthmc_outputs = fthmc(flow=outputs['training']['model'].layers,
-                          num_trajs=num_fthmc_trajs,
-                          config=train_config, ftconfig=ftconfig)
+                                 pre_model=pre_model, **kwargs)
+    #  fthmc_out = run_fthmc(flow=outputs['training']['model'].layers,
+    #                            config=config, ftconfig=ftconfig, **kwargs)
+
+    Lnew = 2 * config.L
+    layers = outputs['training']['model'].layers
+    transfer_out = transfer(L=Lnew,
+                            param=param,
+                            layers=layers,
+                            ftconfig=ftconfig,
+                            config=config,
+                            num_fthmc_trajs=num_fthmc_trajs)
     return {
-        'hmc': hmc_outputs,
+        'hmc': hmc_out,
         'training': outputs['training'],
         'inference': outputs['inference'],
-        'fthmc': fthmc_outputs
+        'fthmc': outputs['fthmc'],
+        'transfer': transfer_out,
     }
 
 
 if __name__ == '__main__':
     configs = parse_configs()
     logger.print_dict(configs.__dict__, name='parsed configs')
-    main(configs.__dict__)
+    cfgs = setup(configs.__dict__)
+    _ = main(config=cfgs['train_config'],
+             param=cfgs['param'],
+             ftconfig=cfgs['ftconfig'])
+    #  main(config=cfgs['train_config'],
+
+    #  main(configs.__dict__)

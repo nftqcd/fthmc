@@ -83,7 +83,11 @@ def mixture_tan_transform_logJ(x: torch.Tensor, s: torch.Tensor):
     )
 
 
-def make_net_from_layers(*, lattice_shape: tuple[int], nets: list[nn.Module]):
+def make_net_from_layers(
+        *,
+        lattice_shape: tuple[int],
+        nets: list[nn.Module]
+):
     n_layers = len(nets)
     layers = []
     for i in range(n_layers):
@@ -106,8 +110,10 @@ def make_net_from_layers(*, lattice_shape: tuple[int], nets: list[nn.Module]):
 ACTIVATION_FNS = {
     'relu': nn.ReLU(),
     'silu': nn.SiLU(),
+    'swish': nn.SiLU(),
     'leaky_relu': nn.LeakyReLU(),
 }
+
 def get_activation_fn(actfn: str = None):
     if actfn is None:
         return nn.SiLU()
@@ -140,10 +146,11 @@ def make_conv_net(
     act_fn = get_activation_fn(actfn=activation_fn)
     sizes = [in_channels] + hidden_sizes + [out_channels]
     for i in range(len(sizes) - 1):
-        conv = nn.Conv2d(sizes[i], sizes[i+1], kernel_size,
-                         padding=padding_size, stride=1,
-                         padding_mode='circular')
-        net.append(conv)
+        net.append(nn.Conv2d(sizes[i], sizes[i+1],
+                             kernel_size, stride=1,
+                             padding=padding_size,
+                             padding_mode='circular'))
+
         #  net.append(nn.Conv2d(sizes[i], sizes[i+1],
         #                       kernel_size,
         #                       padding=padding_size,

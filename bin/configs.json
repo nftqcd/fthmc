@@ -1,31 +1,32 @@
 {
     "param": {
         "L": 8,
-        "beta": 2.0,
+        "beta": 8.0,
         "tau": 0.5,
         "nrun": 1,
         "nstep": 5,
-        "ntraj": 128,
+        "ntraj": 1024,
         "nprint": 100,
         "seed": 1331
     },
     "train_config": {
         "L": 8,
-        "beta": 2.0,
-        "n_era": 1,
-        "n_epoch": 10,
+        "beta": 8.0,
+        "n_era": 10,
+        "n_epoch": 1000,
+        "activation_fn": "silu",
         "n_layers": 16,
         "n_s_nets": 2,
-        "hidden_sizes": [8, 8, 8],
+        "hidden_sizes": [8, 8],
         "kernel_size": 3,
-        "batch_size": 64,
-        "print_freq": 50,
-        "log_freq": 50
+        "batch_size": 256,
+        "print_freq": 100,
+        "log_freq": 100
     },
     "scheduler_config": {
-        "factor": 0.95,
-        "patience": 200,
-        "min_lr": 5e-6,
+        "factor": 0.98,
+        "patience": 10000,
+        "min_lr": 5e-4,
         "verbose": true
     },
     "kwargs": {

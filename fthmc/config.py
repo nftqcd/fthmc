@@ -230,6 +230,28 @@ class TrainConfig:
     # Sizes of hidden layers between convolutional layers
     hidden_sizes: list[int] = field(default_factory=lambda: [8, 8])
 
+    def update_logdirs(self, logdir: str):
+        self.logdir = logdir
+        dtrain = os.path.join(self.logdir, 'training')
+        dinfer = os.path.join(self.logdir, 'inference')
+        dckpts = os.path.join(dtrain, 'checkpoints')
+        #  dinferplots = os.path.join(dinfer, 'plots')
+        #  dtrainplots = os.path.join(dtrain, 'plots')
+        dirs = {
+            'logdir': self.logdir,
+            'training': dtrain,
+            'inference': dinfer,
+            #  'plots': dplots,
+            'ckpts': dckpts,
+        }
+        for _, d in dirs.items():
+            if not os.path.isdir(d):
+                os.makedirs(d)
+
+        self.dirs = dirs
+
+        return dirs
+
     def __post_init__(self):
         self.lat = [self.L, self.L]
         self.nd = len(self.lat)
@@ -239,28 +261,10 @@ class TrainConfig:
         #  self.dt = self.tau / self.nstep
         basedir = os.path.join(LOGS_DIR, 'models')
         lat = "x".join(str(x) for x in self.lat)
-        self.logdir = os.path.join(
-            basedir,
-            f'lat{lat}',
-            f'beta{self.beta}',
-            self.uniquestr()
-        )
-        dtrain = os.path.join(self.logdir, 'training')
-        dinfer = os.path.join(self.logdir, 'inference')
-        dckpts = os.path.join(dtrain, 'checkpoints')
-        #  dinferplots = os.path.join(dinfer, 'plots')
-        #  dtrainplots = os.path.join(dtrain, 'plots')
-        self.dirs = {
-            'logdir': self.logdir,
-            'training': dtrain,
-            'inference': dinfer,
-            #  'plots': dplots,
-            'ckpts': dckpts,
-        }
-        for _, d in self.dirs.items():
-            if not os.path.isdir(d):
-                os.makedirs(d)
-
+        logdir = os.path.join(basedir, f'lat{lat}',
+                              f'beta{self.beta}',
+                              self.uniquestr())
+        self.dirs = self.update_logdirs(logdir)
         # TODO: Wrap createdirs in `if rank == 0 ` loop to prevent multiple
         # workers from trying to create the same dir
 

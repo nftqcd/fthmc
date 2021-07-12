@@ -31,6 +31,7 @@ class U1GaugeAction:
         action = torch.sum(action_density, dim=tuple(range(1, nd+1)))
         return - self.beta * action
 
+
 def apply_flow_to_prior(prior, coupling_layers, *, batch_size):
     x = prior.sample_n(batch_size)
     logq = prior.log_prob(x)
@@ -42,10 +43,13 @@ def apply_flow_to_prior(prior, coupling_layers, *, batch_size):
 
 
 def serial_sample_generator(model, action, batch_size, num_samples):
-    if isinstance(model, dict):
-        layers, prior = model['layers'], model['prior']
-    elif isinstance(model, FlowModel):
+    try:
         layers, prior = model.layers, model.prior
+    except AttributeError:
+        layers, prior = model['layers'], model['prior']
+    #  if isinstance(model, dict):
+    #  elif isinstance(model, FlowModel):
+    #      layers, prior = model.layers, model.prior
 
     layers.eval()
     x, logq, logp = None, None, None

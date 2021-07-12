@@ -63,9 +63,15 @@ def plaq_phase(f, mu=0, nu=1):
             - torch.roll(f[0, :], -1, 1)
             - f[1, :])
 
+def u1_plaq(x: torch.Tensor, mu: int, nu: int):
+    return (x[:, mu]
+            + torch.roll(x[:, nu], -1, mu + 1)
+            - torch.roll(x[:, mu], -1, nu + 1)
+            - x[:, nu])
+
 
 def topo_charge(x):
-    phase = torch_wrap(compute_u1_plaq(x, mu=0, nu=1))
+    phase = torch_wrap(u1_plaq(x, mu=0, nu=1))
     axes = tuple(range(1, len(phase.shape)))
 
     return torch.sum(phase, dim=axes) / TWO_PI

@@ -5,9 +5,10 @@ Implements `FieldTransformation` object for running HMC with trained flow.
 """
 from __future__ import absolute_import, annotations, division, print_function
 
+import os
 import time
 from math import pi as PI
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -127,7 +128,7 @@ class FieldTransformation(nn.Module):
     def action(self, x: torch.Tensor):
         logdet = 0.
         for layer in self.flow:
-            x, logJ = layer(x)
+            x, logJ = layer.forward(x)
             logdet = logdet + logJ
 
         return self._action_fn(x) - logdet
@@ -182,7 +183,11 @@ class FieldTransformation(nn.Module):
         x = x + 0.5 * self.dt * v
         return x, v
 
-    def hmc(self, x: torch.Tensor, step: int = None):
+    def hmc(
+            self,
+            x: torch.Tensor,
+            step: int = None
+    ):
         if torch.cuda.is_available():
             x = x.cuda()
 
@@ -191,7 +196,7 @@ class FieldTransformation(nn.Module):
         if step is not None:
             metrics['traj'] = step
 
-        x, _ = self.flow_backward(x)
+        #  x, _ = self.flow_backward(x)
         v = torch.randn_like(x)
         h0 = self.action(x) + 0.5 * (v * v).sum()
 
@@ -204,7 +209,7 @@ class FieldTransformation(nn.Module):
         exp_mdh = torch.exp(-dh)
         acc = prob < exp_mdh
         xnew = x_ if acc else x
-        xout, _ = self.flow_forward(xnew)
+        #  xout, _ = self.flow_forward(xnew)
 
         metrics.update(**{
             'dt': time.time() - t0,
@@ -212,7 +217,7 @@ class FieldTransformation(nn.Module):
             'dh': dh.detach(),
         })
 
-        return xout, metrics
+        return xnew, metrics
 
     def _batch_hmc(
             self,
@@ -250,10 +255,9 @@ class FieldTransformation(nn.Module):
     def initializer(self, rand: bool = True):
         nd = self.config.nd
         lat = self.config.lat
+        x = torch.zeros([self.config.nd, ] + self.config.lat)
         if rand:
-            x = torch.empty([nd, ] + lat).uniform_(0, TWO_PI)
-        else:
-            x = torch.zeros([nd, ] + lat)
+            x = x.uniform_(0, TWO_PI)
 
         return x[None, :]
 
@@ -266,24 +270,21 @@ class FieldTransformation(nn.Module):
     def run(
             self,
             x: torch.Tensor = None,
-            nprint: int = 1,
-            nplot: int = 1,
+            nprint: int = 25,
+            nplot: int = 25,
             window: int = 10,
-            num_trajs: int = None,
+            num_trajs: int = 1024,
             writer: Optional[SummaryWriter] = None,
             plotdir: str = None,
             **kwargs,
     ):
-        if x is None:
+        if x is not None:
+            assert isinstance(x, torch.Tensor)
+
+        else:
             x = self.initializer()
 
-        if num_trajs is None:
-            num_trajs = 1000
-
-        #  for n in range(num_runs):
-        if x is None:
-            x = self.initializer()
-
+        logger.log(f'Running ftHMC with tau={self.tau}, nsteps={self.nstep}')
         history = {}  # type: dict[str, list[torch.Tensor]]
         q = qed.batch_charges(x)
         p = (-1.) * self.action(x) / self._denom
@@ -305,7 +306,8 @@ class FieldTransformation(nn.Module):
                 qold = history['q'][i-1]
             except KeyError:
                 qold = q
-            lmetrics = self.lattice_metrics(x, qold)
+            x_phys, _ = self.flow_forward(x)
+            lmetrics = self.lattice_metrics(x_phys, qold)
             metrics = {**metrics_, **lmetrics}
 
             for key, val in metrics.items():
@@ -316,29 +318,59 @@ class FieldTransformation(nn.Module):
                     history[key].append(val)
                 except KeyError:
                     history[key] = [val]
-                #  history[key][i] = val
 
             if (i - 1) % nplot == 0 and in_notebook() and plots != {}:
-                #  data = {
-                #      k: history[k][:i, :] for k in ['dq', 'acc', 'plaq']
-                #  }
                 data = {
                     k: history[k] for k in ['dq', 'acc', 'plaq']
                 }
                 plotter.update_plots(plots, data, window=window)
 
             if i % nprint == 0:
-                logger.print_metrics(metrics)  # , pre=pre)
+                logger.print_metrics(metrics)
 
         if plotdir is not None and in_notebook():
             plotter.save_live_plots(plots, outdir=plotdir)
 
         #  histories[n] = history
         plotter.plot_history(history,
-                             config=self.config,
-                             outdir=plotdir,
                              #  self.param,
                              therm_frac=0.0,
+                             outdir=plotdir,
+                             config=self.config,
+                             ftconfig=self.ftconfig,
                              xlabel='Trajectory')
 
         return history
+
+
+def run_ftHMC(
+        flow: torch.nn.Module,
+        config: TrainConfig,
+        tau: float,
+        nstep: int
+):
+    ftconfig = ftConfig(tau=tau, nstep=nstep)
+    if torch.cuda.is_available():
+        flow.to('cuda')
+    flow.eval()
+    ft = FieldTransformation(flow=flow,
+                             config=config,
+                             ftconfig=ftconfig)
+    logdir = config.logdir
+    ftstr = ftconfig.uniquestr()
+    fthmcdir = os.path.join(logdir, 'ftHMC', ftstr)
+    pdir = os.path.join(fthmcdir, 'plots')
+    sdir = os.path.join(fthmcdir, 'summaries')
+    writer = SummaryWriter(log_dir=sdir)
+    runs_history = ft.run(nprint=50,
+                          figsize=(9., 2.),
+                          num_trajs=1024,
+                          writer=writer,
+                          dpi=120, nplot=10,
+                          window=1)
+    dirs = {
+        'logdir': fthmcdir,
+        'plotsdir': pdir,
+        'summarydir': sdir,
+    }
+    return ft, runs_history, dirs

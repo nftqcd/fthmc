@@ -13,7 +13,7 @@ import fthmc.utils.qed_helpers as qed
 import torch.nn as nn
 from fthmc.utils.distributions import bootstrap, BasePrior
 from fthmc.utils.logger import Logger
-from fthmc.config import DTYPE
+from fthmc.config import DTYPE, FlowModel
 
 
 #  NumpyFloat = Union[np.float64, np.float32, np.float64]
@@ -50,7 +50,7 @@ def apply_flow_to_prior(
     x = xi.clone().to(DTYPE)
     logq = prior.log_prob(x)
     for layer in coupling_layers:
-        x, logJ = layer(x)
+        x, logJ = layer.forward(x)
         logq = logq - logJ
 
     return x, xi, logq
@@ -101,9 +101,14 @@ def generate_ensemble(
         'suscept_err': qsq_err,
     }
 
-def serial_sample_generator(model, action_fn, batch_size, num_samples):
-    #  layers = model['layers']
-    #  prior = model['prior']
+
+
+def serial_sample_generator_old(
+        model: FlowModel,
+        action_fn: ActionFn,
+        batch_size: int,
+        num_samples: int
+):
     prior = model.prior
     layers = model.layers
     layers.eval()
@@ -113,13 +118,66 @@ def serial_sample_generator(model, action_fn, batch_size, num_samples):
         batch_i = i % batch_size
         if batch_i == 0:
             # we're out of samples to propose, generate a new batch
-            xi, x, logq = apply_flow_to_prior(prior, layers,
-                                              batch_size=batch_size)
+            _, x, logq = apply_flow_to_prior(prior, layers,
+                                             batch_size=batch_size)
             logp = -action_fn(x)
             q = qed.batch_charges(x)
 
         yield x[batch_i], q[batch_i], logq[batch_i], logp[batch_i]
 
+
+def serial_sample_generator(model, action, batch_size, N_samples):
+    if isinstance(model, dict):
+        layers, prior = model['layers'], model['prior']
+    elif isinstance(model, FlowModel):
+        layers, prior = model.layers, model.prior
+
+    layers.eval()
+    x, logq, logp = None, None, None
+    for i in range(N_samples):
+        batch_i = i % batch_size
+        if batch_i == 0:
+            # we're out of samples to propose, generate a new batch
+            _, x, logq = apply_flow_to_prior(prior, layers, batch_size=batch_size)
+            logp = -action(x)
+        yield x[batch_i], logq[batch_i], logp[batch_i]
+
+
+def make_mcmc_ensemble_new(model, action, batch_size, N_samples):
+    history = {
+        'x' : [],
+        'logq' : [],
+        'logp' : [],
+        'accepted' : []
+    }
+
+    # build Markov chain
+    sample_gen = serial_sample_generator(model, action, batch_size, N_samples)
+    for new_x, new_logq, new_logp in sample_gen:
+        if len(history['logp']) == 0:
+            # always accept first proposal, Markov chain must start somewhere
+            accepted = True
+        else:
+            # Metropolis acceptance condition
+            last_logp = history['logp'][-1]
+            last_logq = history['logq'][-1]
+            p_accept = torch.exp((new_logp - new_logq) - (last_logp - last_logq))
+            p_accept = min(1, p_accept)
+            draw = torch.rand(1) # ~ [0,1]
+            if draw < p_accept:
+                accepted = True
+            else:
+                accepted = False
+                new_x = history['x'][-1]
+                new_logp = last_logp
+                new_logq = last_logq
+        # Update Markov chain
+        history['logp'].append(new_logp)
+        history['logq'].append(new_logq)
+        history['x'].append(new_x)
+        history['accepted'].append(accepted)
+
+    return history
 
 def make_mcmc_ensemble(
     model,
@@ -129,7 +187,7 @@ def make_mcmc_ensemble(
     writer: SummaryWriter = None
 ):
     xarr = []  # for holding the configurations
-    names = ['q', 'dqsq', 'logq', 'logp', 'acc']
+    names = ['x', 'q', 'dqsq', 'logq', 'logp', 'acc']
     history = {
         name: [] for name in names
     }
@@ -139,13 +197,14 @@ def make_mcmc_ensemble(
                                          num_samples)
     step = 0
     with torch.no_grad():
-        for x_new, q_new, logq_new, logp_new in sample_gen:
+        #  for x_new, q_new, logq_new, logp_new in sample_gen:
+        for x_new, logq_new, logp_new in sample_gen:
             # Always accept the first proposal
             if len(history['logp']) == 0:
                 accepted = True
-                q_old = q_new
+                q_old = qed.topo_charge(x_new[None, :])
             else:
-                q_old = history['q'][-1]
+                q_old = qed.topo_charge(xarr[-1][None, :])
                 logp_old = history['logp'][-1]
                 logq_old = history['logq'][-1]
                 p_accept = torch.exp(
@@ -157,11 +216,14 @@ def make_mcmc_ensemble(
                     accepted = True
                 else:
                     accepted = False
+                    #  x_new = history['x'][-1]
                     x_new = xarr[-1]
-                    q_new = q_old
+                    #  q_new = q_old
                     logp_new = logp_old
                     logq_new = logq_old
 
+            q_new = qed.topo_charge(x_new[None, :])
+            #  q_new = qed.batch_charges(x_new[None, :])
             # Update Markov Chain
             xarr.append(x_new)
             metrics = {
