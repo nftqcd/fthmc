@@ -21,14 +21,13 @@ __author__ = 'Sam Foreman'
 __date__ = '05/23/2021'
 
 
+npDTYPE = np.float32
 if torch.cuda.is_available():
     DEVICE = 'cuda'
-    npDTYPE = np.float32
     torch.set_default_tensor_type(torch.cuda.FloatTensor)
 else:
     DEVICE = 'cpu'
-    npDTYPE = np.float64
-    torch.set_default_tensor_type(torch.DoubleTensor)
+    torch.set_default_tensor_type(torch.FloatTensor)
 
 
 from fthmc.utils.logger import Logger, get_timestamp
@@ -38,7 +37,7 @@ logger = Logger()
 DTYPE = torch.get_default_dtype()
 
 DPI = 150
-FIGSIZE = (9, 2)
+FIGSIZE = (9, 3)
 NUM_SAMPLES = 8192
 CHAINS_TO_PLOT = 4
 THERM_FRAC = 0.2
@@ -109,15 +108,16 @@ class SchedulerConfig:
     def summary(self):
         return self.__repr__
 
-    def uniquestr(self):
-        pstr = [
-            f'f{self.factor}',
-            f'p{self.patience}',
-            f'm{self.min_lr}',
-        ]
-        ustr = '_'.join(pstr)
+    def titlestr(self):
+        tstr = ', '.join([f'factor: {self.factor}',
+                          f'patience: {self.patience}',
+                          f'min_lr: {self.min_lr}'])
+        return tstr
 
-        return ustr
+    def uniquestr(self):
+        return '_'.join([f'f{self.factor}',
+                         f'p{self.patience}',
+                         f'm{self.min_lr}'])
 
 
 @dataclass
@@ -171,22 +171,23 @@ class Param:
     def summary(self):
         return self.__repr__
 
+    def titlestr(self):
+        return ', '.join(['x'.join(str(x) for x in self.lat),
+                          f'beta: {self.beta}',
+                          f'tau: {self.tau}',
+                          f'nstep: {self.nstep}',
+                          f'dt: {self.dt}'])
+
     def uniquestr(self):
         lat = "x".join(str(x) for x in self.lat)
-        pstr = [
-            f't{lat}',
-            f'b{self.beta}',
-            f'n{self.ntraj}',
-            f't{self.tau}',
-            f's{self.nstep}',
-        ]
-        ustr = '_'.join(pstr)
-
-        return ustr
-
+        return '_'.join([f't{lat}',
+                         f'b{self.beta}',
+                         f'n{self.ntraj}',
+                         f't{self.tau}',
+                         f's{self.nstep}'])
 
 @dataclass
-class ftConfig:
+class lfConfig:
     tau: float  # trajectory length
     nstep: int  # number of leapfrog steps per trajectory
 
@@ -197,17 +198,16 @@ class ftConfig:
         s = '\n'.join(
             '='.join((str(k), str(v))) for k, v in self.__dict__.items()
         )
-        return '\n'.join(['ftConfig:', 12 * '-', s])
+        return '\n'.join(['lfConfig:', 12 * '-', s])
+
+    def titlestr(self):
+        return ', '.join([f'tau: {self.tau}',
+                          f'nstep: {self.nstep}',
+                          f'dt: {self.dt}'])
+
 
     def uniquestr(self):
-        pstr = [
-            f't{self.tau}',
-            f's{self.nstep}',
-            f'dt{self.dt}',
-        ]
-        ustr = '_'.join(pstr)
-
-        return ustr
+        return '_'.join([f't{self.tau}', f's{self.nstep}', f'dt{self.dt}'])
 
 
 @dataclass
@@ -268,27 +268,34 @@ class TrainConfig:
         # TODO: Wrap createdirs in `if rank == 0 ` loop to prevent multiple
         # workers from trying to create the same dir
 
+    def titlestr(self):
+        hstr = '[' + ','.join([f'{i}' for i in self.hidden_sizes]) + ']'
+        lstr = 'x'.join(str(x) for x in self.lat)
+        return ', '.join([f'{lstr}',
+                          f'beta: {self.beta}',
+                          f'batch: {self.batch_size}',
+                          f'act: {self.activation_fn}',
+                          f'nlayers: {self.n_layers}',
+                          f'nsnets: {self.n_s_nets}',
+                          f'ksize: {self.kernel_size}',
+                          f'sizes: {hstr}',
+                          f'lr: {self.base_lr}'])
+
+
+
     def uniquestr(self):
         hstr = ''.join([f'{i}' for i in self.hidden_sizes])
-        pstrs = [
-            f'L{self.L}',
-            f'b{self.beta}',
-            f'nb{self.batch_size}',
-            f'act{self.activation_fn}',
-            f'nh{self.n_layers}',
-            f'ns{self.n_s_nets}',
-            f'ks{self.kernel_size}',
-            f'hl{hstr}',
-            f'lr{self.base_lr}',
-            f'era{self.n_era}',
-            f'epoch{self.n_epoch}',
-        ]
-        if self.with_force:
-            pstrs += '_force'
-
-        ustr = '_'.join(pstrs)
-
-        return ustr
+        return '_'.join([f'L{self.L}',
+                         f'b{self.beta}',
+                         f'nb{self.batch_size}',
+                         f'act{self.activation_fn}',
+                         f'nh{self.n_layers}',
+                         f'ns{self.n_s_nets}',
+                         f'ks{self.kernel_size}',
+                         f'hl{hstr}',
+                         f'lr{self.base_lr}',
+                         f'era{self.n_era}',
+                         f'epoch{self.n_epoch}'])
 
     def __repr__(self):
         status = {k: v for k, v in self.__dict__.items() if k != 'dirs'}
