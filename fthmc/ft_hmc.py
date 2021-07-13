@@ -15,7 +15,7 @@ import torch.nn as nn
 from torch.utils.tensorboard.writer import SummaryWriter
 
 import fthmc.utils.plot_helpers as plotter
-from fthmc.config import DTYPE, Param, TrainConfig, ftConfig
+from fthmc.config import DTYPE, Param, TrainConfig, lfConfig
 from fthmc.utils import qed_helpers as qed
 from fthmc.utils.logger import Logger, in_notebook
 
@@ -98,15 +98,15 @@ class FieldTransformation(nn.Module):
             self,
             flow: nn.ModuleList,
             config: TrainConfig,
-            ftconfig: ftConfig,
+            lfconfig: lfConfig,
     ):
         super().__init__()
         self.flow = flow                    # layers of a `FlowModel`
         self.config = config                # Training config
-        self.ftconfig = ftconfig            # ftConfig object
-        self.dt = self.ftconfig.dt          # step size
-        self.tau = self.ftconfig.tau        # trajectory length
-        self.nstep = self.ftconfig.nstep    # number of leapfrog steps
+        self.lfconfig = lfconfig            # lfConfig object
+        self.dt = self.lfconfig.dt          # step size
+        self.tau = self.lfconfig.tau        # trajectory length
+        self.nstep = self.lfconfig.nstep    # number of leapfrog steps
         self._denom = (self.config.beta * self.config.volume)
 
 
@@ -325,7 +325,7 @@ class FieldTransformation(nn.Module):
                              therm_frac=0.0,
                              outdir=plotdir,
                              config=self.config,
-                             ftconfig=self.ftconfig,
+                             ftconfig=self.lfconfig,
                              xlabel='Trajectory')
 
         return history
@@ -337,15 +337,15 @@ def run_ftHMC(
         tau: float,
         nstep: int
 ):
-    ftconfig = ftConfig(tau=tau, nstep=nstep)
+    lfconfig = lfConfig(tau=tau, nstep=nstep)
     if torch.cuda.is_available():
         flow.to('cuda')
     flow.eval()
     ft = FieldTransformation(flow=flow,
                              config=config,
-                             ftconfig=ftconfig)
+                             ftconfig=lfconfig)
     logdir = config.logdir
-    ftstr = ftconfig.uniquestr()
+    ftstr = lfconfig.uniquestr()
     fthmcdir = os.path.join(logdir, 'ftHMC', ftstr)
     pdir = os.path.join(fthmcdir, 'plots')
     sdir = os.path.join(fthmcdir, 'summaries')
