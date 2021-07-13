@@ -30,6 +30,7 @@ TWO_PI = 2 * PI
 logger = Logger()
 
 TOL = 1e-6
+WITH_CUDA = False
 if torch.cuda.is_available():
     WITH_CUDA = True
     TOL = 1e-6
