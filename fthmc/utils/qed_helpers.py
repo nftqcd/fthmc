@@ -167,15 +167,22 @@ class BatchAction:
     def __init__(self, beta):
         self.beta = beta
 
-    def __call__(self, cfgs):
-        Nd = cfgs.shape[1]
+    @staticmethod
+    def _u1_plaq(x: torch.Tensor, mu: int, nu: int):
+        return (x[:, mu]                            # U_{mu}(x)
+                + torch.roll(x[:, nu], -1, mu + 1)  # U_{nu}(x+mu)
+                - torch.roll(x[:, mu], -1, nu + 1)  # -U_{mu}(x+nu)
+                - x[:, nu])                         # -U_{nu}(x)
+
+    def __call__(self, x: torch.Tensor):
+        nd = x.shape[1]
         action_density = 0
-        for mu in range(Nd):
-            for nu in range(mu + 1, Nd):
-                plaq = compute_u1_plaq(cfgs, mu, nu)
+        for mu in range(nd):
+            for nu in range(mu + 1, nd):
+                plaq = self._u1_plaq(x, mu, nu)
                 action_density = action_density + torch.cos(plaq)
 
-        action = torch.sum(action_density, dim=tuple(range(1, Nd+1)))
+        action = torch.sum(action_density, dim=tuple(range(1, nd+1)))
         return (-self.beta) * action
 
 

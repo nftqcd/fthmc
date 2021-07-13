@@ -8,7 +8,7 @@ from __future__ import absolute_import, annotations, division, print_function
 import os
 import time
 from math import pi as PI
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -36,6 +36,7 @@ def init_live_plots(
     config: TrainConfig = None,
     **kwargs,
 ):
+    """Initialize live plots for ftHMC."""
     plots = {}
     if colors is None:
         colors = [f'C{i}' for i in range(10)]
@@ -43,18 +44,16 @@ def init_live_plots(
         assert len(colors) == len(ylabels)
     for idx, (xlabel, ylabel) in enumerate(zip(xlabels, ylabels)):
         use_title = (idx == 0)
-        plots[ylabel] = plotter.init_live_plot(param=param,
-                                               config=config,
+        plots[ylabel] = plotter.init_live_plot(param=param, config=config,
+                                               xlabel=xlabel, ylabel=ylabel,
                                                color=colors[idx],
-                                               xlabel=xlabel,
-                                               ylabel=ylabel,
-                                               use_title=use_title,
-                                               **kwargs)
+                                               use_title=use_title, **kwargs)
 
     return plots
 
 
 def jacobian(y: torch.Tensor, x: torch.Tensor, create_graph: bool = False):
+    """Generic function for computing the Jacobian, dy/dx."""
     # xx, yy = x.detach().numpy(), y.detach().numpy()
     jac = []
     flat_y = y.reshape(-1)
@@ -75,6 +74,7 @@ def write_summaries(
         step: int,
         pre: str = 'ftHMC'
 ):
+    """Write summaries of items in `metrics` using `writer`."""
     for key, val in metrics.items():
         if key == 'traj':
             continue
@@ -91,8 +91,8 @@ def write_summaries(
 torch._C._debug_only_display_vmap_fallback_warnings(True)
 
 
-# pylint:disable=invalid-name, unnecessary-lambda, missing-function-docstring
 # pylint:disable=no-member
+# pylint:disable=invalid-name, unnecessary-lambda, missing-function-docstring
 class FieldTransformation(nn.Module):
     def __init__(
             self,
@@ -100,14 +100,14 @@ class FieldTransformation(nn.Module):
             config: TrainConfig,
             ftconfig: ftConfig,
     ):
-
         super().__init__()
-        self.flow = flow        # layers of a `FlowModel`
-        self.config = config    # Training config
-        self.ftconfig = ftconfig
-        self.tau = self.ftconfig.tau
-        self.nstep = self.ftconfig.nstep
-        self.dt = self.ftconfig.dt
+        self.flow = flow                    # layers of a `FlowModel`
+        self.config = config                # Training config
+        self.ftconfig = ftconfig            # ftConfig object
+        self.dt = self.ftconfig.dt          # step size
+        self.tau = self.ftconfig.tau        # trajectory length
+        self.nstep = self.ftconfig.nstep    # number of leapfrog steps
+        self._denom = (self.config.beta * self.config.volume)
 
 
         action_fn = qed.BatchAction(config.beta)
@@ -115,12 +115,6 @@ class FieldTransformation(nn.Module):
         self._charge_fn = lambda x: qed.batch_charges(x=x).detach()
         self._action_sum = lambda x: self.action(x).sum(-1)
         self._action_sum_hmc = lambda x: self._action_fn(x).sum(-1)
-        #  self._force_fn = lambda x: F.jacobian(self.action().sum(-1),
-        #                                        inputs=x,
-        #                                        vectorize=True,
-        #                                        create_graph=True)
-        #
-        self._denom = (self.config.beta * self.config.volume)
         self._plaq_fn = lambda x: (
             ((-1.) * self._action_fn(x) / self._denom).detach()
         )
@@ -168,14 +162,11 @@ class FieldTransformation(nn.Module):
         return torch.remainder(x + PI, TWO_PI) - PI
 
     def calc_energy(self, x: torch.Tensor, v: torch.Tensor):
-        #  return (self.action(x)
-        #          + 0.5 * (v * v).reshape(x.shape[0], -1).sum(-1))
         return self.action(x) + (v * v).sum()
 
     def leapfrog(self, x: torch.Tensor, v: torch.Tensor):
         x_ = x + 0.5 * self.dt * v
         v_ = v + (-self.dt) * self.force(x_)
-
         for _ in range(self.nstep - 1):
             x_ = x_ + self.dt * v_
             v_ = v_ + (-self.dt) * self.force(x_)
@@ -229,32 +220,30 @@ class FieldTransformation(nn.Module):
         if step is not None:
             metrics['traj'] = step
 
-        x0, _ = self.flow_backward(x)
-        v0 = torch.randn_like(x0)
-        h0 = self.calc_energy(x0, v0)
+        #  x0, _ = self.flow_backward(x)
+        v = torch.randn_like(x)
+        h = self.calc_energy(x, v)
 
-        x1, v1 = self.leapfrog(x0, v0)
-        x1 = self.wrap(x1)
-        h1 = self.calc_energy(x1, v1)
+        x_, v_ = self.leapfrog(x, v)
+        x_ = self.wrap(x_)
+        h_ = self.calc_energy(x_, v_)
 
-        dh = h1 - h0
+        dh = h_ - h
         exp_mdh = torch.exp(-dh)
         acc = (torch.rand_like(exp_mdh) < exp_mdh).to(DTYPE)
         m = acc[:, None].to(torch.uint8)
-        x_ = m * x1.flatten(start_dim=1) + (1 - m) * x0.flatten(start_dim=1)
-        x_ = x_.reshape(x0.shape)
-        xout, _ = self.flow_forward(x_)
+        x_ = m * x_.flatten(start_dim=1) + (1 - m) * x.flatten(start_dim=1)
+        x_ = x_.reshape(x.shape)
+        #  xout, _ = self.flow_forward(x_)
         metrics.update({
             'dt': time.time() - t0,
             'acc': acc,
             'dh': dh,
             'exp_mdh': exp_mdh,
         })
-        return xout.detach(), metrics
+        return x_.detach(), metrics
 
     def initializer(self, rand: bool = True):
-        nd = self.config.nd
-        lat = self.config.lat
         x = torch.zeros([self.config.nd, ] + self.config.lat)
         if rand:
             x = x.uniform_(0, TWO_PI)
@@ -333,7 +322,6 @@ class FieldTransformation(nn.Module):
 
         #  histories[n] = history
         plotter.plot_history(history,
-                             #  self.param,
                              therm_frac=0.0,
                              outdir=plotdir,
                              config=self.config,
@@ -373,4 +361,5 @@ def run_ftHMC(
         'plotsdir': pdir,
         'summarydir': sdir,
     }
+
     return ft, runs_history, dirs
