@@ -33,6 +33,18 @@ else:
 from fthmc.utils.logger import Logger, get_timestamp
 from fthmc.utils.distributions import BasePrior
 
+PLAQ_EXACT = {
+    1.0: 0.44638990, 1.5: 0.59613320,
+    2.0: 0.69777477, 2.5: 0.76499665,
+    3.0: 0.80998540, 3.5: 0.84110373,
+    4.0: 0.86352290, 4.5: 0.88033150,
+    5.0: 0.89338326, 5.5: 0.90381753,
+    6.0: 0.91235965, 6.5: 0.91948840,
+    7.0: 0.92553246, 7.5: 0.93072510,
+    8.0: 0.93523590, 8.5: 0.93919160,
+    9.0: 0.94268996, 9.5: 0.94580620
+}
+
 logger = Logger()
 DTYPE = torch.get_default_dtype()
 
@@ -83,6 +95,25 @@ def list_to_arr(x: list):
 class FlowModel:
     prior: BasePrior
     layers: torch.nn.ModuleList
+
+
+@dataclass
+class BaseHistory:
+    skip: list[str] = field(default_factory=list)
+    #  skip: list[str] = field(default_factory=list)
+    #  x: list[torch.Tensor] = field(default_factory=list)
+    #  logq: list[torch.Tensor] = field(default_factory=list)
+    #  logp: list[torch.Tensor] = field(default_factory=list)
+    #  accepted: list[torch.Tensor] = field(default_factory=list)
+
+    def update(self, metrics: dict[str, torch.Tensor]):
+        for key, val in metrics.items():
+            if key in self.skip:
+                continue
+            try:
+                self.__dict__[key].append(val)
+            except KeyError:
+                self.__dict__[key] = [val]
 
 
 @dataclass
@@ -227,6 +258,7 @@ class TrainConfig:
     print_freq: int = 50         # How frequently to print training metrics
     plot_freq: int = 50          # How frequently to update training plots
     log_freq: int = 50           # How frequently to log TensorBoard summaries
+    debug: bool = False          # Treat as a debug run, dont clutter stats
     # Sizes of hidden layers between convolutional layers
     hidden_sizes: list[int] = field(default_factory=lambda: [8, 8])
 
@@ -244,6 +276,7 @@ class TrainConfig:
             #  'plots': dplots,
             'ckpts': dckpts,
         }
+        # TODO [DDP/Horovod]: only create dirs if rank == 0
         for _, d in dirs.items():
             if not os.path.isdir(d):
                 os.makedirs(d)
@@ -253,20 +286,25 @@ class TrainConfig:
         return dirs
 
     def __post_init__(self):
+        # ######
+        # TODO:
+        # - Deal with batch of configurations
+        #     self.shape = [self.batch_size, self.nd, *self.lat]
         self.lat = [self.L, self.L]
         self.nd = len(self.lat)
         self.shape = [self.nd, *self.lat]
-        #  self.shape = [self.batch_size, self.nd, *self.lat]
+        self.latstr = "x".join(str(x) for x in self.lat)
         self.volume = reduce(lambda x, y: x * y, self.lat)
-        #  self.dt = self.tau / self.nstep
-        basedir = os.path.join(LOGS_DIR, 'models')
-        lat = "x".join(str(x) for x in self.lat)
-        logdir = os.path.join(basedir, f'lat{lat}',
-                              f'beta{self.beta}',
-                              self.uniquestr())
+        ustr = [f'lat{self.latstr}', f'beta{self.beta}', self.uniquestr()]
+        if self.debug:
+            here = os.getcwd()
+            logger.log(f'Using working directory for logs!\n   basedir={here}')
+            basedir = os.path.join(here, 'debug')
+        else:
+            basedir = os.path.join(LOGS_DIR, 'models')
+
+        logdir = os.path.join(basedir, *ustr)
         self.dirs = self.update_logdirs(logdir)
-        # TODO: Wrap createdirs in `if rank == 0 ` loop to prevent multiple
-        # workers from trying to create the same dir
 
     def titlestr(self):
         hstr = '[' + ','.join([f'{i}' for i in self.hidden_sizes]) + ']'
