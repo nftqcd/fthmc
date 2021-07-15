@@ -24,7 +24,7 @@ if modulepath not in sys.path:
 
 import fthmc.utils.io as io
 import fthmc.utils.qed_helpers as qed
-from fthmc.config import (CHAINS_TO_PLOT, DPI, SchedulerConfig, TrainConfig,
+from fthmc.config import (CHAINS_TO_PLOT, DPI, KWARGS, Param, SchedulerConfig, TrainConfig,
                           lfConfig)
 from fthmc.ft_hmc import FieldTransformation
 from fthmc.hmc import run_hmc
@@ -74,6 +74,7 @@ def run_fthmc(
         nplot: int = 10,
         window: int = 1,
         num_trajs: int = 1024,
+        **kwargs,
 ):
     logger.rule(f'Running `ftHMC` using trained flow for {num_trajs} trajs')
     if torch.cuda.is_available():
@@ -89,7 +90,7 @@ def run_fthmc(
     sdir = os.path.join(fthmcdir, 'summaries')
     writer = SummaryWriter(log_dir=sdir)
     history = ft.run(x=xi, nprint=nprint, nplot=nplot, window=window,
-                    num_trajs=num_trajs, writer=writer, plotdir=pdir)
+                    num_trajs=num_trajs, writer=writer, plotdir=pdir, **kwargs)
 
     return {'field_transformation': ft, 'history': history}
 
@@ -98,15 +99,15 @@ def train_and_evaluate(
         train_config: TrainConfig,
         model: nn.ModuleList = None,
         pre_model: nn.ModuleList = None,
-        #  dpi: int = DPI,
-        #  figsize: tuple = FIGSIZE,
         num_samples: int = 1024,
         lfconfig: lfConfig = None,
         num_fthmc_trajs: int = 1024,
         chains_to_plot: int = CHAINS_TO_PLOT,
-        #  therm_frac: float = THERM_FRAC,
         scheduler_config: SchedulerConfig = None,
         **kwargs,
+        #  dpi: int = DPI,
+        #  figsize: tuple = FIGSIZE,
+        #  therm_frac: float = THERM_FRAC,
 ):
     # ----------------------------------------------------------
     # TODO: Deal with loading / restoring model from checkpoint
@@ -225,9 +226,9 @@ def setup(
     scheduler_config = configs.get('scheduler_config', None)
     #  model = configs.get('model', None)
     #  pre_model = configs.get('pre_model', None)
-    kwargs = configs.get('kwargs', None)
-    if kwargs is None:
-        kwargs = KWARGS
+    #  kwargs = configs.get('kwargs', None)
+    #  if kwargs is None:
+    #      kwargs = KWARGS
 
     if scheduler_config is not None:
         scheduler_config = SchedulerConfig(**scheduler_config)
