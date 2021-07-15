@@ -4,7 +4,7 @@ inference.py
 from __future__ import absolute_import, print_function, division, annotations
 from dataclasses import dataclass, field
 from fthmc.utils.samplers import ActionFn
-from fthmc.config import DTYPE, FlowModel
+from fthmc.config import BaseHistory, DTYPE, FlowModel
 import torch
 from torch.utils.tensorboard.writer import SummaryWriter
 
@@ -38,19 +38,6 @@ def serial_sample_generator(model, action, batch_size, num_samples):
         yield x[batch_i], logq[batch_i], logp[batch_i]
 
 
-@dataclass
-class History:
-    x: list[torch.Tensor] = field(default_factory=list)
-    logq: list[torch.Tensor] = field(default_factory=list)
-    logp: list[torch.Tensor] = field(default_factory=list)
-    accepted: list[torch.Tensor] = field(default_factory=list)
-
-    def update(self, metrics: dict[str, torch.Tensor]):
-        for key, val in metrics.items():
-            if key in self.__dict__:
-                self.__dict__[key].append(val)
-
-
 def update_summaries(
         step: int,
         writer: SummaryWriter,
@@ -69,6 +56,15 @@ def update_summaries(
             writer.add_histogram(key, val, global_step=step)
 
 
+@dataclass
+class History(BaseHistory):
+    """The list of variables to be tracked inside `make_mcmc_ensemble`."""
+    x: list[torch.Tensor] = field(default_factory=list)
+    logp: list[torch.Tensor] = field(default_factory=list)
+    logq: list[torch.Tensor] = field(default_factory=list)
+    accepted: list[torch.Tensor] = field(default_factory=list)
+
+
 def make_mcmc_ensemble(
         model: FlowModel,
         action_fn: ActionFn,
@@ -76,9 +72,6 @@ def make_mcmc_ensemble(
         num_samples: int,
         writer: SummaryWriter = None
 ):
-    #  history = {         # type = dict[str, list[torch.Tensor]]
-    #      'x': [], 'logq': [], 'logp': [], 'accepted': [],
-    #  }
     history = History()
 
     sample_gen = serial_sample_generator(model, action_fn,
@@ -104,7 +97,6 @@ def make_mcmc_ensemble(
             else:
                 accepted = False
                 new_x = history.x[-1]
-                #  new_x = history['x'][-1]
                 new_logq = last_logq
                 new_logp = last_logp
 
