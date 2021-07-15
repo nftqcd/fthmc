@@ -55,8 +55,14 @@ def list_to_tensor(x: list[Union[torch.Tensor, np.ndarray]]):
 
 
 def get_model(config: TrainConfig):
-    prior = MultivariateUniform(torch.zeros((2, *config.lat)),
-                                TWO_PI * torch.ones(tuple(config.lat)))
+    #  x = TWO_PI * torch.rand(
+    #  x = torch.zeros(tuple(config.lat)).uni
+    #  prior = MultivariateUniform(torch.zeros((2, *config.lat)),
+    #                              TWO_PI * torch.ones(tuple(config.lat)))
+    #  x0 = -PI * torch.ones((2, *config.lat))
+    #  x1 = PI * torch.ones(tuple(config.lat))
+    prior = MultivariateUniform(-PI * torch.ones((2, *config.lat)),
+                                PI * torch.ones(tuple(config.lat)))
     layers = make_u1_equiv_layers(lattice_shape=tuple(config.lat),
                                   n_layers=config.n_layers,
                                   n_mixture_comps=config.n_s_nets,
@@ -439,8 +445,10 @@ def transfer_to_new_lattice(
     flow = make_net_from_layers(nets=get_nets(layers),
                                 lattice_shape=tuple(config_new.lat))
 
-    prior_new = MultivariateUniform(torch.zeros((2, *config_new.lat)),
-                                TWO_PI * torch.ones(tuple(config_new.lat)))
+    prior_new = MultivariateUniform(-PI * torch.ones((2, *config.lat)),
+                                    PI * torch.ones(tuple(config.lat)))
+    #  prior_new = MultivariateUniform(torch.zeros((2, *config_new.lat)),
+    #                                  #  TWO_PI * torch.ones(tuple(config_new.lat)))
     model_new = FlowModel(prior=prior_new, layers=flow)
 
     return {'config': config_new, 'model': model_new}
