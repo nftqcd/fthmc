@@ -325,7 +325,7 @@ class FieldTransformation(nn.Module):
                              therm_frac=0.0,
                              outdir=plotdir,
                              config=self.config,
-                             ftconfig=self.lfconfig,
+                             lfconfig=self.lfconfig,
                              xlabel='Trajectory')
 
         return history
@@ -343,7 +343,7 @@ def run_ftHMC(
     flow.eval()
     ft = FieldTransformation(flow=flow,
                              config=config,
-                             ftconfig=lfconfig)
+                             lfconfig=lfconfig)
     logdir = config.logdir
     ftstr = lfconfig.uniquestr()
     fthmcdir = os.path.join(logdir, 'ftHMC', ftstr)
