@@ -188,8 +188,10 @@ class Logger:
                     }
 
 
+            with_jupyter = in_notebook()
             console = RichConsole(record=False, log_path=False,
-                                  force_jupyter=in_notebook(),
+                                  force_jupyter=with_jupyter,
+                                  force_terminal=(not with_jupyter),
                                   log_time_format='[%X] ',
                                   theme=Theme(theme))#, width=width)
 

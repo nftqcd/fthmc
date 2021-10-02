@@ -30,6 +30,7 @@ TWO_PI = 2 * PI
 logger = Logger()
 
 TOL = 1e-6
+WITH_CUDA = False
 if torch.cuda.is_available():
     WITH_CUDA = True
     TOL = 1e-6
@@ -38,11 +39,12 @@ if torch.cuda.is_available():
 # pylint:disable=missing-function-docstring
 
 def torch_mod(x: torch.Tensor):
-    return torch.remainder(x, TWO_PI)
+    #  return torch.remainder(x, TWO_PI)
+    return torch.remainder(x + PI, 2 * PI) - PI
 
 
 def torch_wrap(x: torch.Tensor):
-    return torch_mod(x+np.pi) - np.pi
+    return torch_mod(x + PI) - PI
 
 
 def grab(var: torch.Tensor):
@@ -57,14 +59,20 @@ def stack_cos_sin(x: torch.Tensor):
     return torch.stack((torch.cos(x), torch.sin(x)), dim=1)
 
 
-def tan_transform(x: torch.Tensor, s: torch.Tensor):
+def tan_transform_symmetric(x: torch.Tensor, s: torch.Tensor):
     return torch_mod(2 * torch.atan(torch.exp(s) * torch.tan(x / 2)))
+
+
+def tan_transform(x: torch.Tensor, s: torch.Tensor):
+    return torch_mod(
+        2 * torch.atan(torch.exp(s) * torch.tan(x / 2.))
+    )
 
 
 def tan_transform_logJ(x: torch.Tensor, s: torch.Tensor):
     return -torch.log(
-        torch.exp(-s)  * torch.cos(x/2) ** 2
-        + torch.exp(s) * torch.sin(x/2) ** 2
+        torch.exp(-s)  * torch.cos(x / 2) ** 2
+        + torch.exp(s) * torch.sin(x / 2) ** 2
     )
 
 
@@ -78,12 +86,15 @@ def mixture_tan_transform_logJ(x: torch.Tensor, s: torch.Tensor):
     cond = (len(x.shape) == len(s.shape))
     assert cond, f'Dimension mismatch between x and s: {x.shape}, vs {s.shape}'
     return (
-        torch.logsumexp(tan_transform_logJ(x, s), dim=1)
-        - np.log(s.shape[1])
+        torch.logsumexp(tan_transform_logJ(x, s), dim=1) - np.log(s.shape[1])
     )
 
 
-def make_net_from_layers(*, lattice_shape: tuple[int], nets: list[nn.Module]):
+def make_net_from_layers(
+        *,
+        lattice_shape: tuple[int],
+        nets: list[nn.Module]
+):
     n_layers = len(nets)
     layers = []
     for i in range(n_layers):
@@ -106,8 +117,10 @@ def make_net_from_layers(*, lattice_shape: tuple[int], nets: list[nn.Module]):
 ACTIVATION_FNS = {
     'relu': nn.ReLU(),
     'silu': nn.SiLU(),
+    'swish': nn.SiLU(),
     'leaky_relu': nn.LeakyReLU(),
 }
+
 def get_activation_fn(actfn: str = None):
     if actfn is None:
         return nn.SiLU()
@@ -140,14 +153,10 @@ def make_conv_net(
     act_fn = get_activation_fn(actfn=activation_fn)
     sizes = [in_channels] + hidden_sizes + [out_channels]
     for i in range(len(sizes) - 1):
-        conv = nn.Conv2d(sizes[i], sizes[i+1], kernel_size,
-                         padding=padding_size, stride=1,
-                         padding_mode='circular')
-        net.append(conv)
-        #  net.append(nn.Conv2d(sizes[i], sizes[i+1],
-        #                       kernel_size,
-        #                       padding=padding_size,
-        #                       stride=1, padding_mode='circular'))
+        net.append(nn.Conv2d(sizes[i], sizes[i+1],
+                             kernel_size, stride=1,
+                             padding=padding_size,
+                             padding_mode='circular'))
         if i != len(sizes) - 2:
             net.append(act_fn)
         else:
@@ -293,8 +302,8 @@ def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=TWO_PI):
             greater_mask = (y > mid_val).int()
             greater_mask = greater_mask.float()
             err = torch.max(torch.abs(y - mid_val))
-            #  if err < tol: return mid_x
-            if err < TOL: return mid_x
+            if err < tol: return mid_x
+            #  if err < TOL: return mid_x
             if torch.all((mid_x == min_x) + (mid_x == max_x)):
                 print('WARNING: Reached floating point '
                       f'precision before tolerance (iter {i}, err {err})')
@@ -308,7 +317,6 @@ def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=TWO_PI):
             f'Error was {err}'
         )
         return mid_x
-
 
 
 # pylint:disable=invalid-name
@@ -331,14 +339,12 @@ class NCPPlaqCouplingLayer(nn.Module):
         self.net = net
         self.inv_prec = inv_prec
         self.inv_max_iter = inv_max_iter
-        #  if torch.cuda.is_available():
         if WITH_CUDA:
             self.net = self.net.cuda()
             for _, val in self.mask.items():
                 val = val.cuda()
 
     def forward(self, x: torch.Tensor):
-        #  if torch.cuda.is_available():
         if WITH_CUDA:
             x = x.cuda()
 

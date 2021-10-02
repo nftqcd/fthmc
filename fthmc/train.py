@@ -55,13 +55,20 @@ def list_to_tensor(x: list[Union[torch.Tensor, np.ndarray]]):
 
 
 def get_model(config: TrainConfig):
-    prior = MultivariateUniform(torch.zeros((2, *config.lat)),
-                                TWO_PI * torch.ones(tuple(config.lat)))
+    #  x = TWO_PI * torch.rand(
+    #  x = torch.zeros(tuple(config.lat)).uni
+    #  prior = MultivariateUniform(torch.zeros((2, *config.lat)),
+    #                              TWO_PI * torch.ones(tuple(config.lat)))
+    #  x0 = -PI * torch.ones((2, *config.lat))
+    #  x1 = PI * torch.ones(tuple(config.lat))
+    prior = MultivariateUniform(-PI * torch.ones((2, *config.lat)),
+                                PI * torch.ones(tuple(config.lat)))
     layers = make_u1_equiv_layers(lattice_shape=tuple(config.lat),
                                   n_layers=config.n_layers,
                                   n_mixture_comps=config.n_s_nets,
                                   hidden_sizes=config.hidden_sizes,
-                                  kernel_size=config.kernel_size)
+                                  kernel_size=config.kernel_size,
+                                  activation_fn=config.activation_fn)
     set_weights(layers)
 
     return FlowModel(prior=prior, layers=layers)
@@ -220,6 +227,11 @@ def train_step(
 
     return metrics
 
+OPT_DICT = {
+    'adam': optim.Adam,
+    'adamw': optim.AdamW,
+}
+
 
 def train(
         #  param: Param,
@@ -231,10 +243,11 @@ def train(
         dpi: int = 120,
         dkl_factor: float = 1.,
         history: dict[str, list] = None,
-        weight_decay: float = 0.,
+        #  weight_decay: float = 0.,
         device: str = None,
         xi: torch.Tensor = None,
         use_scaler: bool = False,
+        #  optstr: str = None
 ):
     """Train the flow model."""
     if figsize is None:
@@ -279,10 +292,23 @@ def train(
     #  writer.add_hparams(asdict(config))
 
     u1_action = qed.BatchAction(config.beta)
+    optimizer = optim.Adam(model.layers.parameters(), lr=config.base_lr)
 
-    optimizer = optim.AdamW(model.layers.parameters(),
-                            lr=config.base_lr,
-                            weight_decay=weight_decay)
+    #  if optstr is None:
+    #      optimizer = optim.AdamW(model.layers.parameters(),
+    #                              lr=config.base_lr,
+    #                              weight_decay=weight_decay)
+    #  else:
+    #      opt = OPT_DICT.get(optstr, None)   # type: optim.Optimizer
+    #      if opt is not None and isinstance(opt, optim.Optimizer):
+    #          optimizer = opt(model.layers.parameters(), lr=config.base_lr)
+    #      else:
+    #          logger.log(f'Invalid `optstr={optstr}` specified. '
+    #                     'Falling back to default (optim.AdamW)')
+    #          optimizer = optim.AdamW(model.layers.parameters(),
+    #                                  lr=config.base_lr,
+    #                                  weight_decay=weight_decay)
+
     scheduler = None
     if scheduler_config is not None:
         schcfg = asdict(scheduler_config)
@@ -328,7 +354,6 @@ def train(
         for epoch in range(config.n_epoch):
             step += 1
             metrics = train_step(model=model,
-                                 #  param=param,
                                  config=config,
                                  xi=xi,
                                  action=u1_action,
@@ -338,19 +363,8 @@ def train(
                                  scheduler=scheduler,
                                  pre_model=pre_model,
                                  dkl_factor=dkl_factor)
-            #  if config.with_force:
-            #      metrics = train_step(model, param,
-            #                           u1_action,
-            #                           optimizer,
-            #                           config.batch_size,
-            #                           config.with_force,
-            #                           pre_model=pre_model,
-            #                           dkl_factor=dkl_factor,
-            #                           force_factor=force_factor)
 
             for k, v in metrics.items():
-                #  if k in skip:
-                #      continue
                 try:
                     history[k].append(v)
                 except KeyError:
@@ -359,7 +373,6 @@ def train(
             if step % log_freq == 0:
                 write_summaries(metrics, writer, step)
 
-            #  win = min(epoch, 20)
             if step % print_freq == 0:
                 logger.print_metrics(metrics,
                                      skip=skip,
@@ -377,7 +390,7 @@ def train(
         dt = time.time() - t0
         ckpt_file = io.save_checkpoint(era=era,
                                        epoch=epoch,
-                                       model=model.layers,  # model['layers'],
+                                       model=model.layers,
                                        outdir=dirs['ckpts'],
                                        history=history,
                                        optimizer=optimizer)
@@ -386,7 +399,7 @@ def train(
 
     ckpt_file = io.save_checkpoint(era=config.n_era,
                                    epoch=config.n_epoch + 1,
-                                   model=model.layers,  # model['layers'],
+                                   model=model.layers,
                                    history=history,
                                    outdir=dirs['ckpts'],
                                    optimizer=optimizer)
@@ -415,20 +428,27 @@ def train(
 
     return outputs
 
-
 def transfer_to_new_lattice(
-        L: int,
+        L_new: int,
         layers: nn.ModuleList,
-        param_init: Param,
+        config: TrainConfig,
+        #  param_init: Param,
 ):
-    pdict = asdict(param_init)
-    pdict['L'] = L
-    param = Param(**pdict)
+    config_ = asdict(config)
+    config_['L'] = L_new
+    config_new = TrainConfig(**config_)
+    logdir = os.path.join(config.logdir,
+                          f'transferred_{L_new}x{L_new}',
+                          f'beta{config_new.beta}',
+                          config_new.uniquestr())
+    dirs = config_new.update_logdirs(logdir)
     flow = make_net_from_layers(nets=get_nets(layers),
-                                lattice_shape=tuple(param.lat))
+                                lattice_shape=tuple(config_new.lat))
 
-    prior = MultivariateUniform(torch.zeros((2, *param.lat)),
-                                TWO_PI * torch.ones(tuple(param.lat)))
-    model = FlowModel(prior=prior, layers=flow)
+    prior_new = MultivariateUniform(-PI * torch.ones((2, *config.lat)),
+                                    PI * torch.ones(tuple(config.lat)))
+    #  prior_new = MultivariateUniform(torch.zeros((2, *config_new.lat)),
+    #                                  #  TWO_PI * torch.ones(tuple(config_new.lat)))
+    model_new = FlowModel(prior=prior_new, layers=flow)
 
-    return {'param': param, 'model': model}
+    return {'config': config_new, 'model': model_new}

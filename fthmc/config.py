@@ -21,24 +21,35 @@ __author__ = 'Sam Foreman'
 __date__ = '05/23/2021'
 
 
+npDTYPE = np.float32
 if torch.cuda.is_available():
     DEVICE = 'cuda'
-    npDTYPE = np.float32
     torch.set_default_tensor_type(torch.cuda.FloatTensor)
 else:
     DEVICE = 'cpu'
-    npDTYPE = np.float64
-    torch.set_default_tensor_type(torch.DoubleTensor)
+    torch.set_default_tensor_type(torch.FloatTensor)
 
 
 from fthmc.utils.logger import Logger, get_timestamp
 from fthmc.utils.distributions import BasePrior
 
+PLAQ_EXACT = {
+    1.0: 0.44638990, 1.5: 0.59613320,
+    2.0: 0.69777477, 2.5: 0.76499665,
+    3.0: 0.80998540, 3.5: 0.84110373,
+    4.0: 0.86352290, 4.5: 0.88033150,
+    5.0: 0.89338326, 5.5: 0.90381753,
+    6.0: 0.91235965, 6.5: 0.91948840,
+    7.0: 0.92553246, 7.5: 0.93072510,
+    8.0: 0.93523590, 8.5: 0.93919160,
+    9.0: 0.94268996, 9.5: 0.94580620
+}
+
 logger = Logger()
 DTYPE = torch.get_default_dtype()
 
 DPI = 150
-FIGSIZE = (9, 2)
+FIGSIZE = (9, 3)
 NUM_SAMPLES = 8192
 CHAINS_TO_PLOT = 4
 THERM_FRAC = 0.2
@@ -87,6 +98,25 @@ class FlowModel:
 
 
 @dataclass
+class BaseHistory:
+    skip: list[str] = field(default_factory=list)
+    #  skip: list[str] = field(default_factory=list)
+    #  x: list[torch.Tensor] = field(default_factory=list)
+    #  logq: list[torch.Tensor] = field(default_factory=list)
+    #  logp: list[torch.Tensor] = field(default_factory=list)
+    #  accepted: list[torch.Tensor] = field(default_factory=list)
+
+    def update(self, metrics: dict[str, torch.Tensor]):
+        for key, val in metrics.items():
+            if key in self.skip:
+                continue
+            try:
+                self.__dict__[key].append(val)
+            except KeyError:
+                self.__dict__[key] = [val]
+
+
+@dataclass
 class SchedulerConfig:
     factor: float
     mode: str = 'min'
@@ -109,15 +139,16 @@ class SchedulerConfig:
     def summary(self):
         return self.__repr__
 
-    def uniquestr(self):
-        pstr = [
-            f'f{self.factor}',
-            f'p{self.patience}',
-            f'm{self.min_lr}',
-        ]
-        ustr = '_'.join(pstr)
+    def titlestr(self):
+        tstr = ', '.join([f'factor: {self.factor}',
+                          f'patience: {self.patience}',
+                          f'min_lr: {self.min_lr}'])
+        return tstr
 
-        return ustr
+    def uniquestr(self):
+        return '_'.join([f'f{self.factor}',
+                         f'p{self.patience}',
+                         f'm{self.min_lr}'])
 
 
 @dataclass
@@ -171,22 +202,23 @@ class Param:
     def summary(self):
         return self.__repr__
 
+    def titlestr(self):
+        return ', '.join(['x'.join(str(x) for x in self.lat),
+                          f'beta: {self.beta}',
+                          f'tau: {self.tau}',
+                          f'nstep: {self.nstep}',
+                          f'dt: {self.dt}'])
+
     def uniquestr(self):
         lat = "x".join(str(x) for x in self.lat)
-        pstr = [
-            f't{lat}',
-            f'b{self.beta}',
-            f'n{self.ntraj}',
-            f't{self.tau}',
-            f's{self.nstep}',
-        ]
-        ustr = '_'.join(pstr)
-
-        return ustr
-
+        return '_'.join([f't{lat}',
+                         f'b{self.beta}',
+                         f'n{self.ntraj}',
+                         f't{self.tau}',
+                         f's{self.nstep}'])
 
 @dataclass
-class ftConfig:
+class lfConfig:
     tau: float  # trajectory length
     nstep: int  # number of leapfrog steps per trajectory
 
@@ -197,17 +229,16 @@ class ftConfig:
         s = '\n'.join(
             '='.join((str(k), str(v))) for k, v in self.__dict__.items()
         )
-        return '\n'.join(['ftConfig:', 12 * '-', s])
+        return '\n'.join(['lfConfig:', 12 * '-', s])
+
+    def titlestr(self):
+        return ', '.join([f'tau: {self.tau}',
+                          f'nstep: {self.nstep}',
+                          f'dt: {self.dt}'])
+
 
     def uniquestr(self):
-        pstr = [
-            f't{self.tau}',
-            f's{self.nstep}',
-            f'dt{self.dt}',
-        ]
-        ustr = '_'.join(pstr)
-
-        return ustr
+        return '_'.join([f't{self.tau}', f's{self.nstep}', f'dt{self.dt}'])
 
 
 @dataclass
@@ -227,64 +258,82 @@ class TrainConfig:
     print_freq: int = 50         # How frequently to print training metrics
     plot_freq: int = 50          # How frequently to update training plots
     log_freq: int = 50           # How frequently to log TensorBoard summaries
+    debug: bool = False          # Treat as a debug run, dont clutter stats
     # Sizes of hidden layers between convolutional layers
     hidden_sizes: list[int] = field(default_factory=lambda: [8, 8])
 
-    def __post_init__(self):
-        self.lat = [self.L, self.L]
-        self.nd = len(self.lat)
-        self.shape = [self.nd, *self.lat]
-        #  self.shape = [self.batch_size, self.nd, *self.lat]
-        self.volume = reduce(lambda x, y: x * y, self.lat)
-        #  self.dt = self.tau / self.nstep
-        basedir = os.path.join(LOGS_DIR, 'models')
-        lat = "x".join(str(x) for x in self.lat)
-        self.logdir = os.path.join(
-            basedir,
-            f'lat{lat}',
-            f'beta{self.beta}',
-            self.uniquestr()
-        )
+    def update_logdirs(self, logdir: str):
+        self.logdir = logdir
         dtrain = os.path.join(self.logdir, 'training')
         dinfer = os.path.join(self.logdir, 'inference')
         dckpts = os.path.join(dtrain, 'checkpoints')
         #  dinferplots = os.path.join(dinfer, 'plots')
         #  dtrainplots = os.path.join(dtrain, 'plots')
-        self.dirs = {
+        dirs = {
             'logdir': self.logdir,
             'training': dtrain,
             'inference': dinfer,
             #  'plots': dplots,
             'ckpts': dckpts,
         }
-        for _, d in self.dirs.items():
+        # TODO [DDP/Horovod]: only create dirs if rank == 0
+        for _, d in dirs.items():
             if not os.path.isdir(d):
                 os.makedirs(d)
 
-        # TODO: Wrap createdirs in `if rank == 0 ` loop to prevent multiple
-        # workers from trying to create the same dir
+        self.dirs = dirs
+
+        return dirs
+
+    def __post_init__(self):
+        # ######
+        # TODO:
+        # - Deal with batch of configurations
+        #     self.shape = [self.batch_size, self.nd, *self.lat]
+        self.lat = [self.L, self.L]
+        self.nd = len(self.lat)
+        self.shape = [self.nd, *self.lat]
+        self.latstr = "x".join(str(x) for x in self.lat)
+        self.volume = reduce(lambda x, y: x * y, self.lat)
+        ustr = [f'lat{self.latstr}', f'beta{self.beta}', self.uniquestr()]
+        if self.debug:
+            here = os.getcwd()
+            logger.log(f'Using working directory for logs!\n   basedir={here}')
+            basedir = os.path.join(here, 'debug')
+        else:
+            basedir = os.path.join(LOGS_DIR, 'models')
+
+        logdir = os.path.join(basedir, *ustr)
+        self.dirs = self.update_logdirs(logdir)
+
+    def titlestr(self):
+        hstr = '[' + ','.join([f'{i}' for i in self.hidden_sizes]) + ']'
+        lstr = 'x'.join(str(x) for x in self.lat)
+        return ', '.join([f'{lstr}',
+                          f'beta: {self.beta}',
+                          f'batch: {self.batch_size}',
+                          f'act: {self.activation_fn}',
+                          f'nlayers: {self.n_layers}',
+                          f'nsnets: {self.n_s_nets}',
+                          f'ksize: {self.kernel_size}',
+                          f'sizes: {hstr}',
+                          f'lr: {self.base_lr}'])
+
+
 
     def uniquestr(self):
         hstr = ''.join([f'{i}' for i in self.hidden_sizes])
-        pstrs = [
-            f'L{self.L}',
-            f'b{self.beta}',
-            f'nb{self.batch_size}',
-            f'act{self.activation_fn}',
-            f'nh{self.n_layers}',
-            f'ns{self.n_s_nets}',
-            f'ks{self.kernel_size}',
-            f'hl{hstr}',
-            f'lr{self.base_lr}',
-            f'era{self.n_era}',
-            f'epoch{self.n_epoch}',
-        ]
-        if self.with_force:
-            pstrs += '_force'
-
-        ustr = '_'.join(pstrs)
-
-        return ustr
+        return '_'.join([f'L{self.L}',
+                         f'b{self.beta}',
+                         f'nb{self.batch_size}',
+                         f'act{self.activation_fn}',
+                         f'nh{self.n_layers}',
+                         f'ns{self.n_s_nets}',
+                         f'ks{self.kernel_size}',
+                         f'hl{hstr}',
+                         f'lr{self.base_lr}',
+                         f'era{self.n_era}',
+                         f'epoch{self.n_epoch}'])
 
     def __repr__(self):
         status = {k: v for k, v in self.__dict__.items() if k != 'dirs'}

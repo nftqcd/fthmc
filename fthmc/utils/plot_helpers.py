@@ -3,12 +3,11 @@ plot_helpers.py
 
 Contains helper functions for plotting metrics.
 """
+# pylint:disable=missing-function-docstring,invalid-name
 from __future__ import absolute_import, annotations, division, print_function
-from fthmc.utils.samplers import apply_flow_to_prior
-#  from fthmc.train import ActionFn
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, List, Union
 
@@ -19,8 +18,11 @@ import torch
 from IPython.display import DisplayHandle, display
 
 import fthmc.utils.io as io
-from fthmc.config import DPI, FlowModel, Param, TrainConfig, DTYPE, ftConfig
+from fthmc.config import (CHAINS_TO_PLOT, DPI, DTYPE, FIGSIZE,
+                          FlowModel, BaseHistory, Param, TrainConfig, lfConfig)
 from fthmc.utils.logger import in_notebook
+from fthmc.utils.inference import apply_flow_to_prior
+
 
 MPL_BACKEND = os.environ.get('MPLBACKEND', None)
 EXT = (
@@ -34,12 +36,10 @@ PathLike = Union[str, Path]
 
 mpl.rcParams['text.usetex'] = False
 
-# pylint:disable=missing-function-docstring,invalid-name
 
 
 @dataclass
 class PlotObject:
-    #  fig: plt.Figure
     ax: plt.Axes
     line: list[plt.Line2D]
 
@@ -61,7 +61,6 @@ def therm_arr(
         therm_frac: float = 0.1,
         ret_steps: bool = True
 ):
-    #  taxis = np.argmax(x.shape)
     taxis = 0
     num_steps = x.shape[taxis]
     therm_steps = int(therm_frac * num_steps)
@@ -119,6 +118,7 @@ def save_live_plots(plots: dict[str, dict], outdir: PathLike):
 
 ArrayLike = Union[np.ndarray, torch.Tensor]
 
+
 def plot_metric(
         metric: Union[ArrayLike, list],
         title: str = None,
@@ -126,25 +126,17 @@ def plot_metric(
         ylabel: str = None,
         hline: bool = True,
         thin: int = 0,
-        num_chains: int = 10,
         therm_frac: float = 0.,
         outfile: PathLike = None,
-        figsize: tuple = None,
+        figsize: tuple = FIGSIZE,
+        num_chains: int = CHAINS_TO_PLOT,
         verbose: bool = True,
         **kwargs,
 ):
     """Plot metric object."""
-    if figsize is None:
-        figsize = (4, 3)
-
     if not isinstance(metric, (list, np.ndarray, torch.Tensor)):
         raise ValueError('metric must be one of '
                          '`list`, `np.ndarray`  or `torch.Tensor`')
-
-    #  if isinstance(metric, list):
-    #      if isinstance(metric[0], tuple) and len(metric[0]) == 1:
-    #          m = np.
-    #          metric = grab(torch.tensor([grab(m[0]) for m in metric]))
     x = metric
     if isinstance(x, list):
         if isinstance(x[0], torch.Tensor):
@@ -186,7 +178,7 @@ def plot_metric(
     if hline:
         avg = np.mean(x)
         label = f'avg: {avg:.4g}'
-        ax.axhline(avg, label=label, color='C4', ls='--', **kwargs)
+        ax.axhline(avg, label=label, color='C1', ls='--', **kwargs)
         ax.legend(loc='best')
 
     ax.grid(True, alpha=0.5)
@@ -207,23 +199,32 @@ def plot_metric(
 
 
 def plot_history(
-        history: dict[str, list],
+        history: Union[BaseHistory, dict[str, list]],
         param: Param = None,
         config: TrainConfig = None,
-        ftconfig: ftConfig = None,
-        therm_frac: float = 0.0,
-        xlabel: str = None,
-        title: str = None,
-        num_chains: int = 10,
+        lfconfig: lfConfig = None,
         outdir: str = None,
         skip: list[str] = None,
-        thin: int = 0,
-        hline: bool = True,
-        verbose: bool = True,
         **kwargs,
+        #  therm_frac: float = 0.,
+        #  xlabel: str = None,
+        #  title: str = None,
+        #  num_chains: int = CHAINS_TO_PLOT,
+        #  thin: int = 0,
+        #  hline: bool = True,
+        #  verbose: bool = True,
 ):
-    for key, val in history.items():
-        if skip is not None and key in skip:
+    assert is_dataclass(history) or isinstance(history, dict)
+    if is_dataclass(history):
+        iterable = history.__dict__.items()
+    elif isinstance(history, dict):
+        iterable = history.items()
+    else:
+        raise ValueError(f"""Expected history to be one of: `History`, `dict`.
+                         Received: {type(history)}""")
+
+    for key, val in iterable:
+        if skip is not None and key in skip and key != 'skip':
             continue
 
         if isinstance(val, (list, np.ndarray, torch.Tensor)):
@@ -240,32 +241,23 @@ def plot_history(
                 finally:
                     vt = np.array(val)
         else:
-            vt = np.array(val)
+            vt = np.array(grab(val))
 
         outfile = None
         if outdir is not None:
             outfile = os.path.join(outdir, f'{key}.{EXT}')
 
+        title = kwargs.pop('title', None)
         if title is None:
-            tarr = get_title(param=param, config=config, ftconfig=ftconfig)
+            tarr = get_title(param=param, config=config, lfconfig=lfconfig)
             title = '\n'.join(tarr) if len(tarr) > 0 else ''
 
-        _ = plot_metric(vt,
-                        ylabel=key,
-                        title=title,
-                        xlabel=xlabel,
-                        outfile=outfile,
-                        thin=thin,
-                        hline=hline,
-                        therm_frac=therm_frac,
-                        num_chains=num_chains,
-                        verbose=verbose,
-                        **kwargs)
-    if not in_notebook():
-        plt.close('all')
-    else:
-        plt.show()
+        try:
+            _ = plot_metric(vt, ylabel=key, title=title, outfile=outfile, **kwargs)
+        except:
+            import pdb; pdb.set_trace()
 
+    plt.close('all') if not in_notebook() else plt.show()
 
 
 yLabel = List[str]
@@ -297,8 +289,8 @@ def init_plots(
 
 def init_live_joint_plots(
         ylabels: list[str],
-        dpi: int = 120,
-        figsize: tuple = None,
+        dpi: int = DPI,
+        figsize: tuple = FIGSIZE,
         param: Param = None,
         config: TrainConfig = None,
         xlabel: str = None,
@@ -312,9 +304,6 @@ def init_live_joint_plots(
     if colors is None:
         n = np.random.randint(10, size=2)
         colors = [f'C{n[0]}', f'C{n[1]}']
-
-    if figsize is None:
-        figsize = (8 ,3)
 
     fig, ax0 = plt.subplots(1, 1, dpi=dpi, figsize=figsize,
                             constrained_layout=True)
@@ -360,40 +349,38 @@ def init_live_joint_plots(
 def get_title(
         param: Param = None,
         config: TrainConfig = None,
-        ftconfig: ftConfig = None,
+        lfconfig: lfConfig = None,
 ):
     title = []
     if param is not None:
-        title.append(param.uniquestr())
+        title.append(param.titlestr())
     if config is not None:
-        title.append(config.uniquestr())
-    if ftconfig is not None:
-        title.append(ftconfig.uniquestr())
+        title.append(config.titlestr())
+    if lfconfig is not None:
+        title.append(lfconfig.titlestr())
 
     return title
 
 
 def init_live_plot(
-        dpi: int = 120,
-        figsize: tuple = None,
         param: Param = None,
         config: TrainConfig = None,
-        ftconfig: ftConfig = None,
+        lfconfig: lfConfig = None,
         xlabel: str = None,
         ylabel: str = None,
         use_title: bool = True,
+        dpi: int = DPI,
+        figsize: tuple = FIGSIZE,
         **kwargs
 ):
     color = kwargs.pop('color', '#87ff00')
     xlabel = 'Epoch' if xlabel is None else xlabel
-    if figsize is None:
-        figsize = (8, 2.75)
     #  sns.set_style('ticks')
     fig, ax = plt.subplots(dpi=dpi, figsize=figsize, constrained_layout=True)
     line = ax.plot([0], [0], c=color, **kwargs)
 
     if use_title:
-        title = get_title(param, config, ftconfig)
+        title = get_title(param, config, lfconfig)
         if len(title) > 0:
             _ = fig.suptitle('\n'.join(title))
 
@@ -503,10 +490,12 @@ def plot_linear_regression(
         batch_size: int = 1024,
         outdir: str = None,
 ):
-    x_, xi_, logq_ = apply_flow_to_prior(flow.prior, flow.layers, batch_size)
+    x_, logq_ = apply_flow_to_prior(flow.prior, flow.layers,
+                                    batch_size=batch_size)
     x = grab(x_)
     seff = -grab(logq_)
-    s = grab(action_fn(x_))
+
+    s = grab(action_fn(x))
     fit_b = np.mean(s) - np.mean(seff)
 
     logger.log(f'slope 1 linear regression S = S_eff + {fit_b:.4f}')
@@ -526,4 +515,3 @@ def plot_linear_regression(
         plt.savefig(outfile, dpi=250, bbox_inches='tight')
 
     return fig, ax
-

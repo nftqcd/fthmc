@@ -1,3 +1,4 @@
+bin/*beta?*
 *outputs*
 *__pycache__*
 *old*
@@ -13,3 +14,11 @@ flow_test_sam/
 plots/
 yarn.lock
 node_modules/
+
+# Ignore Logs
+logs
+*.log
+bin/*20*
+bin/test/**
+*Copy.ipynb*
+*\(?\)*.ipynb
