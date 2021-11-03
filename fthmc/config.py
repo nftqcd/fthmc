@@ -16,6 +16,7 @@ from typing import Callable
 import numpy as np
 import torch
 import torch.nn
+import json
 
 __author__ = 'Sam Foreman'
 __date__ = '05/23/2021'
@@ -336,15 +337,10 @@ class TrainConfig:
                          f'epoch{self.n_epoch}'])
 
     def __repr__(self):
-        status = {k: v for k, v in self.__dict__.items() if k != 'dirs'}
-        hstr = 'TrainConfig:'
-        hline = len(hstr) * '-'
-        h = '\n'.join('='.join((str(k), str(v))) for k, v in status.items())
+        # status = {k: v for k, v in self.__dict__.items() if k != 'dirs'}
+        status = {k: v for k, v in self.__dict__.items() }
+        return json.dumps(status, indent=4)
 
-        dstr = 'dirs:'
-        dline = len(dstr) * '-'
-        d = '\n'.join('='.join((str(k), str(v))) for k, v in self.dirs.items())
-        return '\n'.join([hstr, hline, h, dstr, dline, d])
 
     def to_json(self):
         attrs = {k: v for k, v in self.__dict__.items()}
