@@ -151,6 +151,7 @@ def make_conv_net(
     net = []
     padding_size = (kernel_size // 2)
     act_fn = get_activation_fn(actfn=activation_fn)
+    # hidden_sizes = [8, 8]
     sizes = [in_channels] + hidden_sizes + [out_channels]
     for i in range(len(sizes) - 1):
         net.append(nn.Conv2d(sizes[i], sizes[i+1],
@@ -290,7 +291,7 @@ def make_plaq_masks(mask_shape, mask_mu, mask_off):
     mask['passive'] = 1 - mask['frozen'] - mask['active']
     return mask
 
-def invert_transform_bisect(y, *, f, tol, max_iter, a=0, b=TWO_PI):
+def invert_transform_bisect(y, *, f, tol, max_iter, a=-PI, b=PI):
     min_x = a*torch.ones_like(y)
     max_x = b*torch.ones_like(y)
     min_val = f(min_x)
@@ -378,7 +379,8 @@ class NCPPlaqCouplingLayer(nn.Module):
         x1 = torch_mod(self.mask['active'] * (fx - t).unsqueeze(1))
         transform = lambda x: self.mask['active'] * mixture_tan_transform(x, s)
         x1 = invert_transform_bisect(
-            x1, f=transform, tol=self.inv_prec, max_iter=self.inv_max_iter)
+            x1, f=transform, tol=self.inv_prec, max_iter=self.inv_max_iter
+        )
         local_logJ = self.mask['active'] * mixture_tan_transform_logJ(x1, s)
         axes = tuple(range(1, len(local_logJ.shape)))
         logJ = -torch.sum(local_logJ, dim=axes)
@@ -402,7 +404,7 @@ def make_u1_equiv_layers(
         activation_fn: str = None,
 ):
     layers = []
-    for i in range(n_layers):
+    for i in range(n_layers):  # ~ 16 layers
         # periodically loop through all arrangements of maskings
         mu = i % 2
         off = (i//2) % 4
