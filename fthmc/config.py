@@ -84,6 +84,10 @@ TWO_PI = 2 * PI
 LossFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
+def count_parameters(model: torch.nn.Module):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 def grab(x: torch.Tensor):
     return x.detach().cpu().numpy()
 
@@ -157,7 +161,7 @@ class Param:
     beta: float = 6.0       # Inverse coupling constant
     L: int = 8              # Linear extent of square lattice, (L x L)
     tau: float = 2.0        # Trajectory length
-    nstep: int = 50         # Number of leapfrog steps / trajectory
+    nstep: int = 10         # Number of leapfrog steps / trajectory
     ntraj: int = 256        # Number of trajectories to generate for HMC
     nrun: int = 4           # Number of indep. HMC experiments to run
     nprint: int = 256       # How frequently to print metrics during HMC
@@ -227,10 +231,12 @@ class lfConfig:
         self.dt = self.tau / self.nstep  # step size
 
     def __repr__(self):
-        s = '\n'.join(
-            '='.join((str(k), str(v))) for k, v in self.__dict__.items()
-        )
-        return '\n'.join(['lfConfig:', 12 * '-', s])
+        status = {k: v for k, v in self.__dict__.items() }
+        return json.dumps(status, indent=4)
+        # s = '\n'.join(
+        #     '='.join((str(k), str(v))) for k, v in self.__dict__.items()
+        # )
+        # return '\n'.join(['lfConfig:', 12 * '-', s])
 
     def titlestr(self):
         return ', '.join([f'tau: {self.tau}',
