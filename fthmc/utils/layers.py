@@ -373,7 +373,9 @@ class NCPPlaqCouplingLayer(nn.Module):
     def reverse(self, fx: torch.Tensor):
         fx2 = self.mask['frozen'] * fx
         net_out = self.net(stack_cos_sin(fx2))
-        assert net_out.shape[1] >= 2, 'CNN must output n_mix (s_i) + 1 (t) channels'
+        assert net_out.shape[1] >= 2, (
+            'CNN must output n_mix (s_i) + 1 (t) channels'
+        )
         s, t = net_out[:,:-1], net_out[:,-1]
 
         x1 = torch_mod(self.mask['active'] * (fx - t).unsqueeze(1))
