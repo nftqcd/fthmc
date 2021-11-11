@@ -26,7 +26,7 @@ from fthmc.utils.inference import apply_flow_to_prior
 
 MPL_BACKEND = os.environ.get('MPLBACKEND', None)
 EXT = (
-    'png' if MPL_BACKEND == 'module://itermplot' or in_notebook()
+    'pdf' if MPL_BACKEND == 'module://itermplot' or in_notebook()
     else 'pdf'
 )
 
@@ -252,17 +252,14 @@ def plot_history(
             tarr = get_title(param=param, config=config, lfconfig=lfconfig)
             title = '\n'.join(tarr) if len(tarr) > 0 else ''
 
-        try:
-            _ = plot_metric(vt, ylabel=key, title=title, outfile=outfile, **kwargs)
-        except:
-            import pdb; pdb.set_trace()
+        _ = plot_metric(vt, ylabel=key, title=title,
+                        outfile=outfile, **kwargs)
 
-    plt.close('all') if not in_notebook() else plt.show()
+    _ = plt.close('all') if not in_notebook() else plt.show()
 
 
 yLabel = List[str]
 yLabels = List[yLabel]
-
 
 def init_plots(
         config: TrainConfig = None,
@@ -370,7 +367,7 @@ def init_live_plot(
         ylabel: str = None,
         use_title: bool = True,
         dpi: int = DPI,
-        figsize: tuple = FIGSIZE,
+        figsize: tuple[int, int] = FIGSIZE,
         **kwargs
 ):
     color = kwargs.pop('color', '#87ff00')
