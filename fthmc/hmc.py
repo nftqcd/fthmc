@@ -13,11 +13,11 @@ from fthmc.utils.logger import Logger, check_else_make_dir, in_notebook, savez
 import time
 
 import fthmc.utils.qed_helpers as qed
-from math import pi as PI
+from math import pi
 
 
 logger = Logger()
-TWO_PI = 2. * PI
+TWO_PI = 2. * pi
 
 
 # -----------------------------------------------------------------
@@ -35,7 +35,8 @@ def init_live_plots(
     xlabels: list,
     ylabels: list,
     dpi: int = 120,
-    figsize: tuple = None,
+    use_title: bool = True,
+    figsize: tuple[int, int] = None,
     colors: list = None,
 ):
     plots = {}
@@ -45,6 +46,7 @@ def init_live_plots(
         assert len(colors) == len(ylabels)
     for idx, (xlabel, ylabel) in enumerate(zip(xlabels, ylabels)):
         plots[ylabel] = init_live_plot(dpi=dpi, figsize=figsize,
+                                       use_title=use_title,
                                        param=param,  # , config=config,
                                        color=colors[idx],
                                        xlabel=xlabel, ylabel=ylabel)
@@ -56,8 +58,10 @@ def run_hmc(
         param: Param,
         x: torch.Tensor = None,
         #  keep_fields: bool = True,
-        figsize: tuple = None,
         plot_metrics: bool = True,
+        figsize: tuple[int, int] = None,
+        use_title: bool = True,
+        save_data: bool = True,
         #  colors: list = None,
         #  nprint: int = 1,
         nplot: int = 10,
@@ -67,13 +71,13 @@ def run_hmc(
     Explicitly, we perform `param.nrun` independent experiments, where each
     experiment consists of generating `param.ntraj` trajectories.
     """
-    #  logdir = os.path.join(LOGS_DIR, 'hmc', param.uniquestr())
     logdir = param.logdir
     if os.path.isdir(logdir):
         logdir = io.tstamp_dir(logdir)
 
+    data_dir = os.path.join(logdir, 'data')
     plots_dir = os.path.join(logdir, 'plots')
-    check_else_make_dir(plots_dir)
+    check_else_make_dir([plots_dir, data_dir])
 
     action = qed.BatchAction(param.beta)
     logger.log(repr(param))
@@ -86,7 +90,8 @@ def run_hmc(
     xlabels = len(ylabels) * ['trajectory']
     plots = {}
     if in_notebook():
-        plots = init_live_plots(param=param,  figsize=figsize,  # config=config,
+        plots = init_live_plots(param=param,  figsize=figsize,
+                                use_title=use_title, # config=config,
                                 xlabels=xlabels, ylabels=ylabels)
 
     for n in range(param.nrun):
