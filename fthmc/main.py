@@ -24,12 +24,12 @@ if modulepath not in sys.path:
 
 import fthmc.utils.io as io
 import fthmc.utils.qed_helpers as qed
-from fthmc.config import (CHAINS_TO_PLOT, DPI, KWARGS, Param, SchedulerConfig, TrainConfig,
+from fthmc.config import (CHAINS_TO_PLOT, Param, SchedulerConfig, TrainConfig,
                           lfConfig)
 from fthmc.ft_hmc import FieldTransformation
 from fthmc.hmc import run_hmc
 from fthmc.train import train, transfer_to_new_lattice
-from fthmc.utils.distributions import MultivariateUniform
+# from fthmc.utils.distributions import MultivariateUniform
 #  from fthmc.utils.samplers import make_mcmc_ensemble
 from fthmc.utils.inference import make_mcmc_ensemble
 from fthmc.utils.plot_helpers import plot_history
