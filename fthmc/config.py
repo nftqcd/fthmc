@@ -16,6 +16,7 @@ from typing import Callable
 import numpy as np
 import torch
 import torch.nn
+import json
 
 __author__ = 'Sam Foreman'
 __date__ = '05/23/2021'
@@ -81,6 +82,10 @@ TWO_PI = 2 * PI
 
 
 LossFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+
+
+def count_parameters(model: torch.nn.Module):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def grab(x: torch.Tensor):
@@ -156,7 +161,7 @@ class Param:
     beta: float = 6.0       # Inverse coupling constant
     L: int = 8              # Linear extent of square lattice, (L x L)
     tau: float = 2.0        # Trajectory length
-    nstep: int = 50         # Number of leapfrog steps / trajectory
+    nstep: int = 10         # Number of leapfrog steps / trajectory
     ntraj: int = 256        # Number of trajectories to generate for HMC
     nrun: int = 4           # Number of indep. HMC experiments to run
     nprint: int = 256       # How frequently to print metrics during HMC
@@ -226,10 +231,12 @@ class lfConfig:
         self.dt = self.tau / self.nstep  # step size
 
     def __repr__(self):
-        s = '\n'.join(
-            '='.join((str(k), str(v))) for k, v in self.__dict__.items()
-        )
-        return '\n'.join(['lfConfig:', 12 * '-', s])
+        status = {k: v for k, v in self.__dict__.items() }
+        return json.dumps(status, indent=4)
+        # s = '\n'.join(
+        #     '='.join((str(k), str(v))) for k, v in self.__dict__.items()
+        # )
+        # return '\n'.join(['lfConfig:', 12 * '-', s])
 
     def titlestr(self):
         return ', '.join([f'tau: {self.tau}',
@@ -336,15 +343,10 @@ class TrainConfig:
                          f'epoch{self.n_epoch}'])
 
     def __repr__(self):
-        status = {k: v for k, v in self.__dict__.items() if k != 'dirs'}
-        hstr = 'TrainConfig:'
-        hline = len(hstr) * '-'
-        h = '\n'.join('='.join((str(k), str(v))) for k, v in status.items())
+        # status = {k: v for k, v in self.__dict__.items() if k != 'dirs'}
+        status = {k: v for k, v in self.__dict__.items() }
+        return json.dumps(status, indent=4)
 
-        dstr = 'dirs:'
-        dline = len(dstr) * '-'
-        d = '\n'.join('='.join((str(k), str(v))) for k, v in self.dirs.items())
-        return '\n'.join([hstr, hline, h, dstr, dline, d])
 
     def to_json(self):
         attrs = {k: v for k, v in self.__dict__.items()}
