@@ -51,7 +51,7 @@ def grab(var: torch.Tensor):
     return var.detach().cpu().numpy()
 
 
-def get_nets(layers: nn.ModuleList):
+def get_nets(layers: nn.ModuleList) -> list[nn.Module]:
     return [layer.plaq_coupling.net for layer in layers]
 
 
@@ -92,7 +92,7 @@ def mixture_tan_transform_logJ(x: torch.Tensor, s: torch.Tensor):
 
 def make_net_from_layers(
         *,
-        lattice_shape: tuple[int],
+        lattice_shape: tuple,
         nets: list[nn.Module]
 ):
     n_layers = len(nets)
