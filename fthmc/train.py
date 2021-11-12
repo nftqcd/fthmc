@@ -428,6 +428,7 @@ def train(
 
     return outputs
 
+
 def transfer_to_new_lattice(
         L_new: int,
         layers: nn.ModuleList,
@@ -445,10 +446,8 @@ def transfer_to_new_lattice(
     flow = make_net_from_layers(nets=get_nets(layers),
                                 lattice_shape=tuple(config_new.lat))
 
-    prior_new = MultivariateUniform(-PI * torch.ones((2, *config.lat)),
-                                    PI * torch.ones(tuple(config.lat)))
-    #  prior_new = MultivariateUniform(torch.zeros((2, *config_new.lat)),
-    #                                  #  TWO_PI * torch.ones(tuple(config_new.lat)))
+    prior_new = MultivariateUniform(-PI * torch.ones((2, *config_new.lat)),
+                                    PI * torch.ones(tuple(config_new.lat)))
     model_new = FlowModel(prior=prior_new, layers=flow)
 
     return {'config': config_new, 'model': model_new}
