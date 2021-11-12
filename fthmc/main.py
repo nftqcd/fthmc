@@ -12,6 +12,7 @@ import os
 import sys
 from dataclasses import asdict
 from typing import Optional
+import joblib
 
 import torch
 import torch.nn as nn
@@ -22,6 +23,7 @@ modulepath = os.path.dirname(here)
 if modulepath not in sys.path:
     sys.path.append(modulepath)
 
+from fthmc.config import FlowModel
 import fthmc.utils.io as io
 import fthmc.utils.qed_helpers as qed
 from fthmc.config import (CHAINS_TO_PLOT, Param, SchedulerConfig, TrainConfig,
@@ -33,7 +35,10 @@ from fthmc.train import train, transfer_to_new_lattice
 #  from fthmc.utils.samplers import make_mcmc_ensemble
 from fthmc.utils.inference import make_mcmc_ensemble
 from fthmc.utils.plot_helpers import plot_history
-
+from fthmc.utils.layers import (get_nets, make_net_from_layers,
+                                make_u1_equiv_layers, set_weights)
+from fthmc.distributions import MultivariateUniform
+from math import pi
 #  from fthmc.utils.parse_configs import parse_configs
 
 logger = io.Logger()
@@ -90,14 +95,18 @@ def run_fthmc(
     sdir = os.path.join(fthmcdir, 'summaries')
     writer = SummaryWriter(log_dir=sdir)
     history = ft.run(x=xi, nprint=nprint, nplot=nplot, window=window,
-                    num_trajs=num_trajs, writer=writer, plotdir=pdir, **kwargs)
+                     num_trajs=num_trajs, writer=writer, plotdir=pdir,
+                     **kwargs)
+    histfile = os.path.join(fthmcdir, 'history.z')
+    logger.log(f'Saving history to: {histfile}')
+    joblib.dump(history, histfile)
 
     return {'field_transformation': ft, 'history': history}
 
 
 def train_and_evaluate(
         train_config: TrainConfig,
-        model: nn.ModuleList = None,
+        model: FlowModel,
         pre_model: nn.ModuleList = None,
         num_samples: int = 1024,
         lfconfig: lfConfig = None,
@@ -135,6 +144,7 @@ def train_and_evaluate(
                                      action_fn=action_fn,
                                      num_samples=num_samples,
                                      batch_size=train_config.batch_size)
+        _ = history.__dict__.pop('skip', None)
         plot_history(history=history, config=train_config,
                      num_chains=chains_to_plot, skip=['epoch', 'x'],
                      xlabel='MC Step', outdir=inf_pdir, **kwargs)
@@ -151,7 +161,7 @@ def train_and_evaluate(
 
 
 def transfer(
-        L: int,
+        L_new: int,
         config: TrainConfig,
         layers: nn.ModuleList,
         lfconfig: lfConfig,
@@ -162,18 +172,35 @@ def transfer(
         num_fthmc_trajs: int = 1024,
         scheduler_config: SchedulerConfig = None,
 ):
-    logger.rule(f'Transferring trained model to {L}x{L} lattice')
+    logger.rule(f'Transferring trained model to {L_new}x{L_new} lattice')
     if figsize is None:
         figsize = (9, 2)
 
-    xfr = transfer_to_new_lattice(L_new=L, layers=layers, config=config)
-    config_new = xfr['config']
-    model_new = xfr['model']
+    config_ = asdict(config)
+    config_['L'] = L_new
+    config_new = TrainConfig(**config_)
+
     logdir = os.path.join(config.logdir,
-                          f'transferred_{L}x{L}',
+                          f'transferred_{L_new}x{L_new}',
                           f'beta{config_new.beta}',
                           config_new.uniquestr())
-    io.check_else_make_dir(logdir)
+    _ = config_new.update_logdirs(logdir)
+
+    flow = make_net_from_layers(nets=get_nets(layers),
+                                lattice_shape=tuple(config_new.lat))
+
+    prior_new = MultivariateUniform(-pi * torch.ones((2, *config_new.lat)),
+                                    pi * torch.ones(tuple(config_new.lat)))
+    model_new = FlowModel(prior=prior_new, layers=flow)
+
+    # xfr = transfer_to_new_lattice(L_new=L, layers=layers, config=config)
+    # config_new = xfr['config']
+    # model_new = xfr['model']
+    # logdir = os.path.join(config.logdir,
+    #                       f'transferred_{L}x{L}',
+    #                       f'beta{config_new.beta}',
+    #                       config_new.uniquestr())
+    # io.check_else_make_dir(logdir)
     if run_hmc and param is not None:
         param_ = asdict(param)
         param_['L'] = config_new.L
@@ -264,9 +291,9 @@ def main(
     #  fthmc_out = run_fthmc(flow=outputs['training']['model'].layers,
     #                            config=config, ftconfig=ftconfig, **kwargs)
 
-    Lnew = 2 * config.L
+    L_new = 2 * config.L
     layers = outputs['training']['model'].layers
-    transfer_out = transfer(L=Lnew,
+    transfer_out = transfer(L_new=L_new,
                             param=param,
                             layers=layers,
                             lfconfig=lfconfig,
