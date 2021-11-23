@@ -37,7 +37,7 @@ from fthmc.utils.inference import make_mcmc_ensemble
 from fthmc.utils.plot_helpers import plot_history
 from fthmc.utils.layers import (get_nets, make_net_from_layers,
                                 make_u1_equiv_layers, set_weights)
-from fthmc.distributions import MultivariateUniform
+from fthmc.utils.distributions import MultivariateUniform
 from math import pi
 #  from fthmc.utils.parse_configs import parse_configs
 
@@ -107,34 +107,30 @@ def run_fthmc(
 def train_and_evaluate(
         train_config: TrainConfig,
         model: FlowModel,
-        pre_model: nn.ModuleList = None,
+        pre_model: FlowModel = None,
         num_samples: int = 1024,
         lfconfig: lfConfig = None,
         num_fthmc_trajs: int = 1024,
         chains_to_plot: int = CHAINS_TO_PLOT,
         scheduler_config: SchedulerConfig = None,
         **kwargs,
-        #  dpi: int = DPI,
-        #  figsize: tuple = FIGSIZE,
-        #  therm_frac: float = THERM_FRAC,
 ):
     # ----------------------------------------------------------
     # TODO: Deal with loading / restoring model from checkpoint
     # ----------------------------------------------------------
     logger.rule(', '.join([f'Training FlowModel for {train_config.n_era} era',
                            f'each of {train_config.n_epoch} epochs']))
-    logger.log(train_config)
+    logger.log(f'{train_config}')
     if scheduler_config is not None:
-        logger.log(scheduler_config)
+        logger.log(f'{scheduler_config}')
 
     train_out = train(config=train_config, model=model,
-                      pre_model=pre_model, #, figsize=figsize, dpi=dpi,
+                      pre_model=pre_model,
                       scheduler_config=scheduler_config)
 
     history = {}
     if num_samples > 0:
         logger.rule(f'Using trained model to generate {num_samples} samples')
-        #  action_fn = qed.BatchAction(train_config.beta)
         action_fn = qed.BatchAction(train_config.beta)
         dirs = train_out['dirs']
         logdir = dirs['logdir']
