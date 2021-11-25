@@ -96,6 +96,8 @@ def list_to_arr(x: list):
     return np.array([grab(torch.stack(i)) for i in x])
 
 
+# TODO: Split up TrainConfig using NetworkConfig, StepsConfig, ExperimentConfig
+
 @dataclass
 class FlowModel:
     prior: BasePrior
@@ -103,13 +105,35 @@ class FlowModel:
 
 
 @dataclass
+class ExperimentConfig:
+    L: int          # lattice Volume
+    beta: float     # coupling constant
+
+
+@dataclass
+class NetworkConfig:
+    activation_fn: str = 'silu'
+    batch_size: int = 64
+    base_lr: float = 0.001
+    n_s_nets: int = 2            # Number of (RealNVP) coupling layers, `s_net`
+    n_layers: int = 24           # Number of hidden layers in each `s_net`
+    kernel_size: int = 3         # Kernel size in Conv2D layers
+    with_force: bool = False     # Minimize force norm during training
+    # hidden layers between convolutional layers
+    hidden_sizes: list[int] = field(default_factory=lambda: [8, 8])
+
+
+@dataclass
+class StepsConfig:
+    n_era: int = 10
+    n_epoch: int = 100
+    print_freq: int = 100
+    plot_freq: int = 100
+    log_freq: int = 100
+
+@dataclass
 class BaseHistory:
     skip: list[str] = field(default_factory=list)
-    #  skip: list[str] = field(default_factory=list)
-    #  x: list[torch.Tensor] = field(default_factory=list)
-    #  logq: list[torch.Tensor] = field(default_factory=list)
-    #  logp: list[torch.Tensor] = field(default_factory=list)
-    #  accepted: list[torch.Tensor] = field(default_factory=list)
 
     def update(self, metrics: dict[str, torch.Tensor]):
         for key, val in metrics.items():
@@ -167,8 +191,8 @@ class Param:
     nprint: int = 256       # How frequently to print metrics during HMC
     seed: int = 11 * 13     # Random seed
     randinit: bool = False  # Start from randomly initialized configuration?
-    nth_interop: int = 2    # Number of interop threads
-    nth: int = int(os.environ.get('OMP_NUM_THREADS', '2'))  # n OMP threads
+    # nth_interop: int = 2    # Number of interop threads
+    # nth: int = int(os.environ.get('OMP_NUM_THREADS', '2'))  # n OMP threads
 
     def __post_init__(self):
         self.lat = [self.L, self.L]
@@ -208,11 +232,11 @@ class Param:
         return self.__repr__
 
     def titlestr(self):
-        return ', '.join(['x'.join(str(x) for x in self.lat),
-                          f'beta: {self.beta}',
-                          f'tau: {self.tau}',
-                          f'nstep: {self.nstep}',
-                          f'dt: {self.dt}'])
+        return ', '.join([r'$\times$'.join(str(x) for x in self.lat),
+                          fr"""$\beta: {self.beta}$""",
+                          fr"""$\tau: {self.tau}$""",
+                          fr"""$\ell: {self.nstep}$""",
+                          fr"""$\delta t: {self.dt}$"""])
 
     def uniquestr(self):
         lat = "x".join(str(x) for x in self.lat)
@@ -233,16 +257,13 @@ class lfConfig:
     def __repr__(self):
         status = {k: v for k, v in self.__dict__.items() }
         return json.dumps(status, indent=4)
-        # s = '\n'.join(
-        #     '='.join((str(k), str(v))) for k, v in self.__dict__.items()
-        # )
-        # return '\n'.join(['lfConfig:', 12 * '-', s])
 
     def titlestr(self):
-        return ', '.join([f'tau: {self.tau}',
-                          f'nstep: {self.nstep}',
-                          f'dt: {self.dt}'])
-
+        return ', '.join([
+            rf"""$\tau: {{{self.tau}}}$""",
+            rf"""$\ell: {{{self.nstep}}}$""",
+            rf"""$\delta t: {{{self.dt}}}$""",
+        ])
 
     def uniquestr(self):
         return '_'.join([f't{self.tau}', f's{self.nstep}', f'dt{self.dt}'])
@@ -274,8 +295,6 @@ class TrainConfig:
         dtrain = os.path.join(self.logdir, 'training')
         dinfer = os.path.join(self.logdir, 'inference')
         dckpts = os.path.join(dtrain, 'checkpoints')
-        #  dinferplots = os.path.join(dinfer, 'plots')
-        #  dtrainplots = os.path.join(dtrain, 'plots')
         dirs = {
             'logdir': self.logdir,
             'training': dtrain,
@@ -293,10 +312,11 @@ class TrainConfig:
         return dirs
 
     def __post_init__(self):
-        # ######
+        # ------------------------------------------------------------
         # TODO:
         # - Deal with batch of configurations
         #     self.shape = [self.batch_size, self.nd, *self.lat]
+        # ------------------------------------------------------------
         self.lat = [self.L, self.L]
         self.nd = len(self.lat)
         self.shape = [self.nd, *self.lat]
@@ -317,16 +337,14 @@ class TrainConfig:
         hstr = '[' + ','.join([f'{i}' for i in self.hidden_sizes]) + ']'
         lstr = 'x'.join(str(x) for x in self.lat)
         return ', '.join([f'{lstr}',
-                          f'beta: {self.beta}',
-                          f'batch: {self.batch_size}',
-                          f'act: {self.activation_fn}',
-                          f'nlayers: {self.n_layers}',
-                          f'nsnets: {self.n_s_nets}',
-                          f'ksize: {self.kernel_size}',
-                          f'sizes: {hstr}',
-                          f'lr: {self.base_lr}'])
-
-
+                          fr"""$\beta: {{{self.beta}}}$"""
+                          fr"""$B: {{{self.batch_size}}}$""",
+                          fr"""\sigma: {{{self.activation_fn}}}$""",
+                          fr"""$N: {{{self.n_layers}}}$""",
+                          fr"""$M: {{{self.n_s_nets}}}$""",
+                          fr"""$W: {{{self.kernel_size}}}$""",
+                          fr"""$n: {{{hstr}}}$""",
+                          fr"""lr: {{{self.base_lr}}}$"""])
 
     def uniquestr(self):
         hstr = ''.join([f'{i}' for i in self.hidden_sizes])
