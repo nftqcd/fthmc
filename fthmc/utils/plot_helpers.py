@@ -25,10 +25,10 @@ from fthmc.utils.inference import apply_flow_to_prior
 
 
 MPL_BACKEND = os.environ.get('MPLBACKEND', None)
-EXT = (
-    'pdf' if MPL_BACKEND == 'module://itermplot' or in_notebook()
-    else 'pdf'
-)
+# EXT = (
+#     'pdf' if MPL_BACKEND == 'module://itermplot' or in_notebook()
+#     else 'pdf'
+# )
 
 logger = io.Logger()
 
@@ -109,7 +109,7 @@ def save_live_plots(plots: dict[str, dict], outdir: PathLike):
     io.check_else_make_dir(outdir)
     logger.log(f'Saving live plots to: {outdir}')
     for key, plot in plots.items():
-        outfile = os.path.join(outdir, f'{key}_live.{EXT}')
+        outfile = os.path.join(outdir, f'{key}_live.pdf')
         try:
             savefig(plot['fig'], outfile, verbose=False)
         except KeyError:
@@ -245,7 +245,7 @@ def plot_history(
 
         outfile = None
         if outdir is not None:
-            outfile = os.path.join(outdir, f'{key}.{EXT}')
+            outfile = os.path.join(outdir, f'{key}.pdf')
 
         title = kwargs.pop('title', None)
         if title is None:
