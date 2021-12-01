@@ -9,6 +9,17 @@ import torch
 from torch.utils.tensorboard.writer import SummaryWriter
 
 
+def drop_nans_from_tensor(x: torch.Tensor):
+    # flatten and remember original shape
+    shape = x.shape
+    y = x.reshape(shape[0], -1)
+    # Drop all rows containing any nan
+    y = y[~torch.any(y.isnan(), dim=1)]
+    # reshape back
+    return y.reshape(y.shape[0], *shape[1:])
+
+
+
 
 def apply_flow_to_prior(prior, coupling_layers, *, batch_size):
     x = prior.sample_n(batch_size)
@@ -53,7 +64,13 @@ def update_summaries(
 
         writer.add_scalar(key, val.mean(), global_step=step)
         if len(val.shape) > 1:
+            if torch.any(val.isnan()):
+                v = drop_nans_from_tensor(val)
+                if v.shape[0] == 0:
+                    continue
+
             writer.add_histogram(key, val, global_step=step)
+
 
 
 @dataclass
