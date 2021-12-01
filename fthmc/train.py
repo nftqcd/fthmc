@@ -237,6 +237,7 @@ def train(
         #  param: Param,
         config: TrainConfig,
         model: FlowModel = None,
+        optimizer: torch.Optimizer = None,
         pre_model: FlowModel = None,
         scheduler_config: SchedulerConfig = None,
         figsize: tuple = None,
@@ -279,20 +280,21 @@ def train(
         train_dir = io.tstamp_dir(train_dir)
 
     dirs = {
-        'logdir': logdir,
-        'training': train_dir,
-        'plots': os.path.join(train_dir, 'plots'),
-        'ckpts': os.path.join(train_dir, 'checkpoints'),
-        'summaries': os.path.join(train_dir, 'summaries'),
+        'logdir': str(logdir),
+        'training': str(train_dir),
+        'plots': str(Path(train_dir).joinpath('plots')),
+        'ckpts': str(Path(train_dir).joinpath('checkpoints')),
+        'summaries': str(Path(train_dir).joinpath('summaries')),
     }
     logging.check_else_make_dir(list(dirs.values()))
-    writer = SummaryWriter(log_dir=dirs['summaries'])
+    writer = SummaryWriter(log_dir=str(dirs['summaries']))
     logger.log(f'Writing summaries to: {dirs["summaries"]}')
     #  writer.add_graph(model.layers, input_to_model=verbose=True)
     #  writer.add_hparams(asdict(config))
 
     u1_action = qed.BatchAction(config.beta)
-    optimizer = optim.Adam(model.layers.parameters(), lr=config.base_lr)
+    if optimizer is None:
+        optimizer = optim.Adam(model.layers.parameters(), lr=config.base_lr)
 
     #  if optstr is None:
     #      optimizer = optim.AdamW(model.layers.parameters(),
