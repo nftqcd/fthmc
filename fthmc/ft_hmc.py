@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 from torch.utils.tensorboard.writer import SummaryWriter
 
+import fthmc.utils.io as io
 import fthmc.utils.plot_helpers as plotter
 from fthmc.config import DTYPE, Param, TrainConfig, lfConfig
 from fthmc.utils import qed_helpers as qed
@@ -79,12 +80,24 @@ def write_summaries(
         if key == 'traj':
             continue
         #  if key == 'dt':
-        if key in ['dt', 'acc']:
-            val = torch.tensor(val, dtype=DTYPE)
-        if len(val.shape) > 1:
-            writer.add_histogram(f'{pre}/{key}', val, global_step=step)
+        # if key in ['dt', 'acc']:
+        if isinstance(val, float):
+            writer.add_scalar(f'{pre}/{key}', val, global_step=step)
+        elif isinstance(val, torch.Tensor):
+            val = val.detach().type(torch.get_default_dtype())
+            if len(val.shape) > 1:
+                writer.add_histogram(f'{pre}/{key}', val, global_step=step)
         else:
+            val = torch.tensor(val, dtype=DTYPE)
             writer.add_scalar(f'{pre}/{key}', val.mean(), global_step=step)
+        # if isinstance(val, torch.Tensor):
+        #     val = val.detach().type(torch.get_default_dtype())
+        # if isinstance(val, float):
+        #     writer.add_scalar(f'{pre}/{key}', val, global_step=step)
+        # elif len(val.shape) > 1:
+        #     writer.add_histogram(f'{pre}/{key}', val, global_step=step)
+        # else:
+        #     writer.add_scalar(f'{pre}/{key}', val.mean(), global_step=step)
 
 
 
@@ -321,6 +334,8 @@ class FieldTransformation(nn.Module):
             plotter.save_live_plots(plots, outdir=plotdir)
 
         #  histories[n] = history
+        # hfile = os.path.join(train_dir, 'train_history.z')
+        # io.save_history(history, hfile, name='ftHMC_history')
         plotter.plot_history(history,
                              therm_frac=0.0,
                              outdir=plotdir,
