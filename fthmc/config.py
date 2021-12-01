@@ -46,6 +46,17 @@ PLAQ_EXACT = {
     9.0: 0.94268996, 9.5: 0.94580620
 }
 
+LATEX_STRS = {
+    'q': r"$Q$",
+    'dq': r"$\delta Q$",
+    'plaq': r"$x_{P}$",
+    'acc': r"$A(x'|x)$",
+    'dh': r"$\delta H$",
+    'dt': r"$\delta t$",
+    'logp': r"$\log(p)$",
+    'logq': r"$\log(q)$",
+}
+
 logger = Logger()
 DTYPE = torch.get_default_dtype()
 
@@ -260,9 +271,9 @@ class lfConfig:
 
     def titlestr(self):
         return ', '.join([
-            rf"""$\tau: {{{self.tau}}}$""",
-            rf"""$\ell: {{{self.nstep}}}$""",
-            rf"""$\delta t: {{{self.dt}}}$""",
+            rf"""$\tau: {self.tau}$""",
+            rf"""$\ell: {self.nstep}$""",
+            rf"""$\delta t: {self.dt}$""",
         ])
 
     def uniquestr(self):
@@ -336,15 +347,15 @@ class TrainConfig:
     def titlestr(self):
         hstr = '[' + ','.join([f'{i}' for i in self.hidden_sizes]) + ']'
         lstr = 'x'.join(str(x) for x in self.lat)
-        return ', '.join([f'{lstr}',
-                          fr"""$\beta: {{{self.beta}}}$"""
-                          fr"""$B: {{{self.batch_size}}}$""",
-                          fr"""\sigma: {{{self.activation_fn}}}$""",
-                          fr"""$N: {{{self.n_layers}}}$""",
-                          fr"""$M: {{{self.n_s_nets}}}$""",
-                          fr"""$W: {{{self.kernel_size}}}$""",
-                          fr"""$n: {{{hstr}}}$""",
-                          fr"""lr: {{{self.base_lr}}}$"""])
+        return ', '.join([f'{lstr} ',
+                          fr'$\beta: {self.beta}$'
+                          fr'$B: {self.batch_size}$',
+                          fr'\sigma: {self.activation_fn}$',
+                          fr'$N: {self.n_layers}$',
+                          fr'$M: {self.n_s_nets}$',
+                          fr'$W: {self.kernel_size}$',
+                          fr'$n: {hstr}$',
+                          fr'lr: {self.base_lr}$'])
 
     def uniquestr(self):
         hstr = ''.join([f'{i}' for i in self.hidden_sizes])
