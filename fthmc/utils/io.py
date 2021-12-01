@@ -93,6 +93,24 @@ OptimizerList = "Union[tuple[optim.Optimizer], list[optim.Optimizer]]"
 #      Union[tuple[optim.Optimizer], list[optim.Optimizer]],
 #  ]
 
+def find_and_load_checkpoint(logdir: Union[str, Path]) -> dict[str]:
+    if isinstance(logdir, str):
+        logdir = Path(logdir)
+
+    conds = lambda f: (
+        f.is_file()
+        and 'training' in str(f)
+        and 'transferred' not in str(f)
+    )
+    ckpts = sorted(
+        [f for f in logdir.rglob('*.tar') if conds(f)],
+        key=os.path.getmtime
+    )
+    if len(ckpts) > 0:
+        logger.log(f'Found checkpoint:\n {ckpts[-1]}')
+        return torch.load(ckpts[-1])
+
+
 def save_checkpoint(
         era: int,
         epoch: int,
@@ -107,14 +125,21 @@ def save_checkpoint(
                          '`[optim.Optimizer, dict, tuple, list]`.\n'
                          f'Receieved: {type(optimizer)}')
 
-    fname = f'ckpt-era{era}-epoch{epoch}.tar'
-    ckpt_dir = os.path.abspath(str(outdir))
+    fname = '-'.join([
+        'ckpt',
+        f'era{era}'.zfill(3),
+        f'epoch{epoch}'.zfill(5)
+    ])
+    # fname = f'{fname}.tar'
+    # fname = f'ckpt-era{era_str}-epoch{epoch}.tar'
+    ckpt_dir = Path(str(outdir))
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
     # -------------------------------------------------
     # TODO: Deal with only keeping last N checkpoints
     # -------------------------------------------------
     #  ckpt_files = [os.path.join(ckpt_dir, i) for i in os.listdir(ckpt_dir)]
     outfile = os.path.join(ckpt_dir, fname)
-    check_else_make_dir(ckpt_dir)
+    outfile = str(Path(ckpt_dir).joinpath(f'{fname}.tar'))
     #  outfile = os.path.abspath(str(outfile))
     #  head, _ = os.path.split(outfile)
     #  check_else_make_dir(head)
@@ -124,12 +149,11 @@ def save_checkpoint(
         'era': era,
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
-        #  'optimizer_state_dict': optimizer.state_dict(),
+         'optimizer_state_dict': optimizer.state_dict(),
     }
 
     if history is not None:
         checkpoint['history'] = history
-        #  checkpoint.update({'history': history})
 
     if isinstance(optimizer, optim.Optimizer):
         checkpoint['optimizer_state_dict'] = optimizer.state_dict()
